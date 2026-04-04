@@ -1,11 +1,12 @@
-# Atlas de Acórdãos V4
+# Atlas de Acórdãos MS — Versão final cliente
 
-Versão com:
+Principais entregas desta versão:
 - classificação mais robusta entre recurso, contrarrazão e impugnação
-- validação do acórdão já citado na peça
-- verificação de compatibilidade contextual
-- correção sugerida quando o número não bate ou o uso é fraco
-- sugestões curtas por tese jurídica
+- auditoria da citação já existente na peça
+- correção sugerida quando o acórdão citado não é compatível ou não é localizado
+- até 2 teses curtas e aplicadas para reforço argumentativo
+- download da peça corrigida em DOCX e PDF
+- interface mais comercial, limpa e responsiva
 
 ## Estrutura esperada
 
