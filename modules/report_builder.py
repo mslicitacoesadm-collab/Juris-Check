@@ -1,10 +1,11 @@
-from typing import Dict, Any, List
+from typing import Any, Dict, List
+
 
 def build_export_rows(analysis: Dict[str, Any]) -> List[Dict[str, Any]]:
-    rows = []
+    rows: List[Dict[str, Any]] = []
 
-    for item in analysis["citation_results"]:
-        if item["matched_record"]:
+    for item in analysis.get("citation_results", []):
+        if item.get("matched_record"):
             rec = item["matched_record"]
             rows.append({
                 "tipo": "citacao",
@@ -15,31 +16,30 @@ def build_export_rows(analysis: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "relator": rec["relator"],
                 "score": 1.0,
             })
-        else:
-            if item["suggestions"]:
-                for sug in item["suggestions"]:
-                    rows.append({
-                        "tipo": "citacao",
-                        "status": item["status_label"],
-                        "trecho": item["raw"],
-                        "numero_acordao_sugerido": sug["numero_acordao"],
-                        "colegiado": sug["colegiado"],
-                        "relator": sug["relator"],
-                        "score": sug["score"],
-                    })
-            else:
+        elif item.get("suggestions"):
+            for sug in item["suggestions"]:
                 rows.append({
                     "tipo": "citacao",
                     "status": item["status_label"],
                     "trecho": item["raw"],
-                    "numero_acordao_sugerido": "",
-                    "colegiado": "",
-                    "relator": "",
-                    "score": "",
+                    "numero_acordao_sugerido": sug["numero_acordao"],
+                    "colegiado": sug["colegiado"],
+                    "relator": sug["relator"],
+                    "score": sug["score"],
                 })
+        else:
+            rows.append({
+                "tipo": "citacao",
+                "status": item["status_label"],
+                "trecho": item["raw"],
+                "numero_acordao_sugerido": "",
+                "colegiado": "",
+                "relator": "",
+                "score": "",
+            })
 
-    for block in analysis["block_results"]:
-        for sug in block["suggestions"]:
+    for block in analysis.get("block_results", []):
+        for sug in block.get("suggestions", []):
             rows.append({
                 "tipo": f"bloco_{block['block_index']}",
                 "status": "Sugestão semântica",
@@ -52,21 +52,23 @@ def build_export_rows(analysis: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     return rows
 
+
+
 def build_markdown_report(file_name: str, analysis: Dict[str, Any]) -> str:
     lines = [
         f"# Relatório de análise - {file_name}",
         "",
-        analysis["summary_markdown"],
+        analysis.get("summary_markdown", ""),
         "",
         "## Citações detectadas",
     ]
 
-    if not analysis["citation_results"]:
+    if not analysis.get("citation_results"):
         lines.append("- Nenhuma citação automática detectada.")
     else:
         for item in analysis["citation_results"]:
             lines.append(f"- **{item['raw']}** -> {item['status_label']}")
-            if item["matched_record"]:
+            if item.get("matched_record"):
                 rec = item["matched_record"]
                 lines.append(f"  - Correspondência: {rec['numero_acordao']} | {rec['colegiado']} | {rec['relator']}")
             for sug in item.get("suggestions", []):
@@ -76,7 +78,7 @@ def build_markdown_report(file_name: str, analysis: Dict[str, Any]) -> str:
 
     lines.append("")
     lines.append("## Sugestões por bloco")
-    if not analysis["block_results"]:
+    if not analysis.get("block_results"):
         lines.append("- Nenhuma sugestão acima do score mínimo.")
     else:
         for block in analysis["block_results"]:

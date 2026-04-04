@@ -11,10 +11,11 @@ CITATION_PATTERNS = [
 def extract_citations(text: str) -> List[Dict[str, str]]:
     citations = []
     seen = set()
+    source = text or ""
     for pattern in CITATION_PATTERNS:
-        for match in re.finditer(pattern, text or "", flags=re.IGNORECASE):
+        for match in re.finditer(pattern, source, flags=re.IGNORECASE):
             raw = re.sub(r"\s+", " ", match.group(0)).strip()
-            if raw in seen:
+            if not raw or raw in seen:
                 continue
             seen.add(raw)
             numero = ""
@@ -35,36 +36,42 @@ def extract_citations(text: str) -> List[Dict[str, str]]:
     return citations
 
 
-
-def split_into_blocks(text: str, max_blocks: int = 25, min_chars: int = 220) -> List[str]:
+def split_into_blocks(text: str, max_blocks: int = 25, min_chars: int = 220, max_chars: int = 1200) -> List[str]:
     paragraphs = [p.strip() for p in re.split(r"\n\s*\n+", text or "") if p.strip()]
-    blocks = []
+    if not paragraphs:
+        cleaned = re.sub(r"\s+", " ", text or "").strip()
+        return [cleaned] if cleaned else []
+
+    blocks: List[str] = []
     current = ""
 
-    for p in paragraphs:
-        if len(current) + len(p) + 1 < 1200:
-            current += ("\n" if current else "") + p
+    for paragraph in paragraphs:
+        candidate = f"{current}\n{paragraph}".strip() if current else paragraph
+        if len(candidate) <= max_chars:
+            current = candidate
         else:
             if current:
                 blocks.append(current.strip())
-            current = p
+            current = paragraph
+
     if current:
         blocks.append(current.strip())
 
-    merged = []
+    merged: List[str] = []
     buffer_text = ""
     for block in blocks:
         if len(block) < min_chars:
-            buffer_text += ("\n" if buffer_text else "") + block
+            buffer_text = f"{buffer_text}\n{block}".strip() if buffer_text else block
             if len(buffer_text) >= min_chars:
-                merged.append(buffer_text.strip())
+                merged.append(buffer_text)
                 buffer_text = ""
         else:
             if buffer_text:
-                merged.append(buffer_text.strip())
+                merged.append(buffer_text)
                 buffer_text = ""
             merged.append(block)
+
     if buffer_text:
-        merged.append(buffer_text.strip())
+        merged.append(buffer_text)
 
     return merged[:max_blocks]

@@ -1,27 +1,53 @@
-from typing import Any, Dict, List, Tuple
+import math
+import re
+from collections import Counter
+from typing import Any, Dict, List
 
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
+TOKEN_RE = re.compile(r"[a-zà-ÿ0-9]{2,}", re.IGNORECASE)
+STOPWORDS = {
+    "de", "da", "do", "das", "dos", "e", "em", "para", "por", "com", "sem", "na", "no", "nas", "nos",
+    "ao", "aos", "as", "os", "o", "a", "um", "uma", "que", "se", "ou", "à", "às", "art", "arts", "tcu"
+}
+
+
+def tokenize(text: str) -> List[str]:
+    tokens = [t.lower() for t in TOKEN_RE.findall(text or "")]
+    return [t for t in tokens if t not in STOPWORDS]
 
 
 
-def build_search_index(base_records: List[Dict[str, Any]]) -> Tuple[TfidfVectorizer, Any]:
-    corpus = [r.get("texto_indexacao", "") or "registro vazio" for r in base_records]
-    vectorizer = TfidfVectorizer(
-        strip_accents="unicode",
-        lowercase=True,
-        ngram_range=(1, 2),
-        max_features=30000,
-        min_df=1,
-    )
-    base_matrix = vectorizer.fit_transform(corpus)
-    return vectorizer, base_matrix
+def build_search_index(base_records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    indexed: List[Dict[str, Any]] = []
+    for rec in base_records:
+        text = rec.get("texto_indexacao", "") or "registro vazio"
+        tokens = tokenize(text)
+        vector = Counter(tokens)
+        norm = math.sqrt(sum(v * v for v in vector.values())) or 1.0
+        indexed.append({
+            "record": rec,
+            "vector": vector,
+            "norm": norm,
+        })
+    return indexed
+
+
+
+def _cosine(query_vec: Counter, query_norm: float, doc_vec: Counter, doc_norm: float) -> float:
+    if not query_vec or not doc_vec:
+        return 0.0
+    common = set(query_vec) & set(doc_vec)
+    dot = sum(query_vec[token] * doc_vec[token] for token in common)
+    if dot <= 0:
+        return 0.0
+    return dot / (query_norm * doc_norm)
 
 
 
 def _exact_match(citation: Dict[str, str], base_records: List[Dict[str, Any]]):
-    numero = citation.get("numero_acordao_num", "").strip()
-    ano = citation.get("ano_acordao", "").strip()
+    numero = (citation.get("numero_acordao_num") or "").strip()
+    ano = (citation.get("ano_acordao") or "").strip()
+    if not numero:
+        return None
     for rec in base_records:
         if rec.get("numero_acordao_num") == numero and (not ano or rec.get("ano_acordao") == ano):
             return rec
@@ -31,39 +57,35 @@ def _exact_match(citation: Dict[str, str], base_records: List[Dict[str, Any]]):
 
 
 
-def _semantic_candidates(
-    query_text: str,
-    vectorizer,
-    base_matrix,
-    base_records,
-    top_k: int,
-    min_score: float,
-):
-    if not query_text.strip():
+def _semantic_candidates(query_text: str, search_index: List[Dict[str, Any]], top_k: int, min_score: float):
+    tokens = tokenize(query_text)
+    if not tokens:
         return []
-    query_vec = vectorizer.transform([query_text])
-    sims = cosine_similarity(query_vec, base_matrix).flatten()
-    ranked = sims.argsort()[::-1]
-    results = []
+    query_vec = Counter(tokens)
+    query_norm = math.sqrt(sum(v * v for v in query_vec.values())) or 1.0
+
+    ranked: List[Dict[str, Any]] = []
     seen = set()
-    for idx in ranked[: max(top_k * 10, 20)]:
-        score = float(sims[idx])
-        if score < min_score:
-            continue
-        rec = dict(base_records[idx])
+    for item in search_index:
+        rec = item["record"]
         if rec.get("id") in seen:
             continue
+        score = _cosine(query_vec, query_norm, item["vector"], item["norm"])
+        if score < min_score:
+            continue
         seen.add(rec.get("id"))
-        rec["score"] = score
-        base_text = (rec.get("sumario") or rec.get("decisao") or rec.get("assunto") or "").strip()
-        rec["paragrafo_sugerido"] = (
-            f"Conforme entendimento consubstanciado no {rec['numero_acordao']} - {rec['colegiado']}, "
-            f"de relatoria de {rec['relator']}, observa-se que {base_text or 'há pertinência temática com o argumento desenvolvido na peça'}."
+        sug = dict(rec)
+        sug["score"] = float(score)
+        base_text = (sug.get("sumario") or sug.get("decisao") or sug.get("assunto") or "").strip()
+        sug["paragrafo_sugerido"] = (
+            f"Conforme entendimento consubstanciado no {sug['numero_acordao']} - {sug['colegiado']}, "
+            f"de relatoria de {sug['relator']}, observa-se que "
+            f"{base_text or 'há pertinência temática com o argumento desenvolvido na peça'}."
         )
-        results.append(rec)
-        if len(results) >= top_k:
-            break
-    return results
+        ranked.append(sug)
+
+    ranked.sort(key=lambda x: x["score"], reverse=True)
+    return ranked[:top_k]
 
 
 
@@ -72,8 +94,7 @@ def analyze_piece(
     blocks: List[str],
     citations: List[Dict[str, str]],
     base_records: List[Dict[str, Any]],
-    vectorizer,
-    base_matrix,
+    search_index: List[Dict[str, Any]],
     top_k: int = 3,
     min_score: float = 0.12,
 ) -> Dict[str, Any]:
@@ -85,54 +106,34 @@ def analyze_piece(
         exact = _exact_match(citation, base_records)
         if exact:
             citacoes_validas += 1
-            citation_results.append(
-                {
-                    "raw": citation["raw"],
-                    "status": "valida",
-                    "status_label": "Válida",
-                    "matched_record": exact,
-                    "suggestions": [],
-                }
-            )
+            citation_results.append({
+                "raw": citation["raw"],
+                "status": "valida",
+                "status_label": "Válida",
+                "matched_record": exact,
+                "suggestions": [],
+            })
             continue
 
-        suggestions = _semantic_candidates(
-            query_text=citation["raw"],
-            vectorizer=vectorizer,
-            base_matrix=base_matrix,
-            base_records=base_records,
-            top_k=top_k,
-            min_score=min_score,
-        )
+        suggestions = _semantic_candidates(citation["raw"], search_index, top_k, min_score)
         citacoes_divergentes += 1
-        citation_results.append(
-            {
-                "raw": citation["raw"],
-                "status": "divergente",
-                "status_label": "Divergente ou não localizada",
-                "matched_record": None,
-                "suggestions": suggestions,
-            }
-        )
+        citation_results.append({
+            "raw": citation["raw"],
+            "status": "divergente",
+            "status_label": "Divergente ou não localizada",
+            "matched_record": None,
+            "suggestions": suggestions,
+        })
 
     block_results = []
     for idx, block in enumerate(blocks, start=1):
-        suggestions = _semantic_candidates(
-            query_text=block,
-            vectorizer=vectorizer,
-            base_matrix=base_matrix,
-            base_records=base_records,
-            top_k=top_k,
-            min_score=min_score,
-        )
+        suggestions = _semantic_candidates(block, search_index, top_k, min_score)
         if suggestions:
-            block_results.append(
-                {
-                    "block_index": idx,
-                    "block_text": block,
-                    "suggestions": suggestions,
-                }
-            )
+            block_results.append({
+                "block_index": idx,
+                "block_text": block,
+                "suggestions": suggestions,
+            })
 
     summary_lines = [
         "### Resumo executivo",

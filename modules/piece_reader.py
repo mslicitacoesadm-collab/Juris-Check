@@ -3,16 +3,23 @@ import io
 import docx
 import pdfplumber
 
+
 def read_uploaded_file(uploaded_file) -> str:
     suffix = uploaded_file.name.lower().split(".")[-1]
 
     if suffix == "txt":
-        return uploaded_file.getvalue().decode("utf-8", errors="ignore")
+        raw = uploaded_file.getvalue()
+        for enc in ("utf-8", "latin-1"):
+            try:
+                return raw.decode(enc)
+            except Exception:
+                continue
+        return raw.decode("utf-8", errors="ignore")
 
     if suffix == "docx":
         data = io.BytesIO(uploaded_file.getvalue())
         document = docx.Document(data)
-        return "\n".join(p.text for p in document.paragraphs)
+        return "\n".join(p.text for p in document.paragraphs if p.text)
 
     if suffix == "pdf":
         texts = []
