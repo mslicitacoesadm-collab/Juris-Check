@@ -7,12 +7,13 @@ CITATION_PATTERNS = [
     r"\b(\d{1,5})\s*/\s*(20\d{2})\s*-\s*TCU\s*-\s*(?:Plen[aá]rio|1[ªa]\s*C[aâ]mara|2[ªa]\s*C[aâ]mara)",
 ]
 
+
 def extract_citations(text: str) -> List[Dict[str, str]]:
     citations = []
     seen = set()
     for pattern in CITATION_PATTERNS:
-        for match in re.finditer(pattern, text, flags=re.IGNORECASE):
-            raw = match.group(0)
+        for match in re.finditer(pattern, text or "", flags=re.IGNORECASE):
+            raw = re.sub(r"\s+", " ", match.group(0)).strip()
             if raw in seen:
                 continue
             seen.add(raw)
@@ -33,8 +34,10 @@ def extract_citations(text: str) -> List[Dict[str, str]]:
             })
     return citations
 
+
+
 def split_into_blocks(text: str, max_blocks: int = 25, min_chars: int = 220) -> List[str]:
-    paragraphs = [p.strip() for p in re.split(r"\n\s*\n+", text) if p.strip()]
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n+", text or "") if p.strip()]
     blocks = []
     current = ""
 
