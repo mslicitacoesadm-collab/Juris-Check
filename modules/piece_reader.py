@@ -1,35 +1,29 @@
 from __future__ import annotations
 
 from io import BytesIO
+from typing import Any
 
 import docx
 import pdfplumber
 
 
-def read_uploaded_file(uploaded_file) -> str:
-    suffix = uploaded_file.name.lower().split('.')[-1]
+def read_uploaded_file(uploaded_file: Any) -> str:
+    name = (getattr(uploaded_file, 'name', '') or '').lower()
     data = uploaded_file.read()
-    uploaded_file.seek(0)
-
-    if suffix == 'txt':
-        for enc in ('utf-8', 'utf-8-sig', 'latin-1'):
-            try:
-                return data.decode(enc)
-            except Exception:
-                continue
+    if not data:
+        return ''
+    if name.endswith('.txt'):
         return data.decode('utf-8', errors='ignore')
-
-    if suffix == 'docx':
+    if name.endswith('.docx'):
         doc = docx.Document(BytesIO(data))
-        return '\n'.join(p.text for p in doc.paragraphs if p.text and p.text.strip())
-
-    if suffix == 'pdf':
-        texts = []
+        parts = [p.text.strip() for p in doc.paragraphs if p.text and p.text.strip()]
+        return '\n'.join(parts)
+    if name.endswith('.pdf'):
+        pages = []
         with pdfplumber.open(BytesIO(data)) as pdf:
             for page in pdf.pages:
                 txt = page.extract_text() or ''
                 if txt.strip():
-                    texts.append(txt)
-        return '\n'.join(texts)
-
+                    pages.append(txt)
+        return '\n\n'.join(pages)
     raise ValueError('Formato não suportado. Use PDF, DOCX ou TXT.')
