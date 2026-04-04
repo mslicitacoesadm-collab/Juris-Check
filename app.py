@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+from difflib import HtmlDiff
 from pathlib import Path
 
 import pandas as pd
@@ -12,7 +14,7 @@ from modules.piece_reader import read_uploaded_file
 from modules.report_builder import build_export_rows, build_markdown_report
 from modules.search_engine import build_thesis_paragraph, search_candidates, validate_citation
 
-st.set_page_config(page_title='Atlas de Acórdãos MS', page_icon='⚖️', layout='wide')
+st.set_page_config(page_title='Atlas de Acórdãos MS V6', page_icon='⚖️', layout='wide')
 
 BASE_DIR = Path(__file__).parent
 DB_DIR = BASE_DIR / 'data' / 'base'
@@ -39,6 +41,46 @@ def cached_search(db_paths: tuple[str, ...], query_text: str, thesis_key: str, t
     return search_candidates([Path(p) for p in db_paths], query_text, thesis_key=thesis_key, top_k=top_k)
 
 
+
+def badge_html(label: str, tone: str) -> str:
+    colors = {
+        'good': ('#dcfce7', '#166534'),
+        'warn': ('#fef3c7', '#92400e'),
+        'bad': ('#fee2e2', '#991b1b'),
+        'info': ('#dbeafe', '#1d4ed8'),
+    }
+    bg, fg = colors[tone]
+    return f"<span style='display:inline-block;padding:.2rem .55rem;border-radius:999px;background:{bg};color:{fg};font-size:.8rem;font-weight:700'>{label}</span>"
+
+
+
+def risk_style(risk: str) -> tuple[str, str, str]:
+    if risk == 'baixo':
+        return ('Baixo risco', '#166534', '#dcfce7')
+    if risk == 'médio':
+        return ('Risco moderado', '#92400e', '#fef3c7')
+    return ('Alto risco', '#991b1b', '#fee2e2')
+
+
+
+def thesis_quality_label(score: float) -> str:
+    if score >= 0.46:
+        return 'Aderência forte'
+    if score >= 0.30:
+        return 'Aderência boa'
+    return 'Aderência moderada'
+
+
+
+def diff_html(original: str, revised: str) -> str:
+    hd = HtmlDiff(wrapcolumn=110)
+    return hd.make_table(original.splitlines(), revised.splitlines(), 'Original', 'Corrigida', context=True, numlines=1)
+
+
+if 'analysis_history' not in st.session_state:
+    st.session_state.analysis_history = []
+
+
 db_files = find_db_files(DB_DIR)
 db_paths = tuple(str(p) for p in db_files)
 summary = cached_summary(str(DB_DIR), _db_signature(DB_DIR))
@@ -46,55 +88,55 @@ summary = cached_summary(str(DB_DIR), _db_signature(DB_DIR))
 st.markdown(
     """
     <style>
-    .hero {padding: 1.2rem 1.3rem; border: 1px solid rgba(120,120,120,.16); border-radius: 24px; background: linear-gradient(135deg, #081528 0%, #14325c 55%, #1d4d85 100%); color: white; margin-bottom: 1rem;}
-    .hero p {margin: .2rem 0 0 0; opacity: .95; line-height: 1.45;}
-    .card {padding: 1rem 1.05rem; border: 1px solid rgba(120,120,120,.15); border-radius: 20px; background: rgba(255,255,255,.03); height: 100%;}
-    .soft {color:#475569; font-size:.95rem; line-height:1.5;}
-    .tiny {font-size:.88rem; color:#64748b;}
-    .tag {display:inline-block; padding: .22rem .62rem; border-radius: 999px; background:#eef3ff; color:#1e3a8a; margin-right:.4rem; margin-bottom:.35rem; font-size:.8rem;}
-    .badge-good,.badge-warn,.badge-bad {display:inline-block; padding:.18rem .55rem; border-radius:999px; font-size:.78rem; font-weight:600;}
-    .badge-good {background:#dcfce7; color:#166534;}
-    .badge-warn {background:#fef3c7; color:#92400e;}
-    .badge-bad {background:#fee2e2; color:#991b1b;}
-    .panel-title {margin:.1rem 0 .5rem 0; font-size:1.02rem; font-weight:700;}
-    @media (max-width: 768px){ .hero{padding:1rem;} }
+    .hero{padding:1.25rem 1.3rem;border-radius:28px;background:linear-gradient(135deg,#071527 0%,#12345d 55%,#175b9a 100%);color:white;border:1px solid rgba(255,255,255,.12);margin-bottom:1rem}
+    .hero h1{margin:0 0 .35rem 0;font-size:2rem}
+    .hero p{margin:.15rem 0;line-height:1.5;opacity:.96}
+    .metric-card,.soft-card{padding:1rem 1.05rem;border:1px solid rgba(120,120,120,.16);border-radius:20px;background:rgba(255,255,255,.03);height:100%}
+    .soft-card h3{margin:.05rem 0 .4rem 0;font-size:1rem}
+    .premium-box{padding:.9rem 1rem;border-radius:18px;background:#f8fafc;border:1px solid #e2e8f0}
+    .small{font-size:.92rem;color:#475569;line-height:1.45}
+    .scorebar{height:10px;border-radius:999px;background:#e5e7eb;overflow:hidden}
+    .scorefill{height:10px;border-radius:999px;background:linear-gradient(90deg,#0ea5e9,#22c55e)}
+    .compare-box .diff_header{background:#0f172a;color:white}.compare-box td{font-size:.84rem}.compare-box .diff_add{background:#dcfce7}.compare-box .diff_sub{background:#fee2e2}
+    @media (max-width: 768px){.hero h1{font-size:1.55rem}}
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-col_logo, col_text = st.columns([1, 4])
-with col_logo:
+logo_col, hero_col = st.columns([1, 4])
+with logo_col:
     if LOGO_PATH.exists():
         st.image(str(LOGO_PATH), use_container_width=True)
-with col_text:
+with hero_col:
     st.markdown(
         """
         <div class='hero'>
-            <h1 style='margin:0;'>Atlas de Acórdãos MS</h1>
-            <p>Auditoria de citações, correção inteligente de acórdãos e reforço por tese jurídica para recurso, contrarrazão e impugnação.</p>
-            <p><strong>Por que você merece este sistema?</strong> Porque uma peça bem escrita perde força quando a referência está errada, desalinhada com o tema ou artificialmente inflada. Aqui, a validação vem antes da sugestão.</p>
+            <h1>Atlas de Acórdãos MS · V6 Premium</h1>
+            <p><strong>Auditoria, correção e reforço argumentativo</strong> para recurso, contrarrazão e impugnação.</p>
+            <p>Este sistema existe para proteger sua peça de um risco silencioso: citar um acórdão errado, fraco ou deslocado do contexto. Aqui, a citação é auditada, o fundamento é comparado com a base e a correção volta pronta para uso.</p>
+            <p><strong>O que ele entrega:</strong> leitura por tese jurídica, correção de acórdão incompatível, reforço curto por fundamento e peça revisada para download.</p>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
 with st.sidebar:
-    st.header('Configurações da análise')
+    st.header('Painel premium')
     top_k = st.slider('Máximo de acórdãos por tese', 1, 2, 2)
-    max_blocks = st.slider('Teses máximas lidas na peça', 4, 14, 8)
-    st.caption('A V5 prioriza auditoria da citação existente e devolve no máximo duas teses úteis, curtas e aplicáveis.')
+    max_blocks = st.slider('Teses máximas analisadas', 4, 12, 8)
+    st.caption('A V6 prioriza auditoria da citação já usada na peça, sinalização de risco e comparação entre versão original e revisada.')
 
-m1, m2, m3 = st.columns([1, 1, 2.2])
+m1, m2, m3 = st.columns([1, 1, 2])
 m1.metric('Acórdãos ativos na base', f"{summary['total_registros']:,}".replace(',', '.'))
 m2.metric('Bases SQLite detectadas', summary['total_bases'])
 m3.markdown(
-    "<div class='card'><div class='panel-title'>Lacunas que o sistema preenche</div><div class='soft'>Corrige referência incompatível, evita citação fantasma, reduz excesso de texto e devolve reforço jurisprudencial em formato mais aproveitável para peça administrativa.</div></div>",
+    "<div class='soft-card'><h3>Por que este sistema é valioso</h3><div class='small'>Ele reduz risco argumentativo, economiza tempo de revisão, evita citação fantasma e aumenta a credibilidade técnica da peça diante da Administração.</div></div>",
     unsafe_allow_html=True,
 )
 
 uploaded_file = st.file_uploader('Envie a peça para análise', type=['pdf', 'docx', 'txt'])
-manual_text = st.text_area('Ou cole o texto da peça aqui', height=180)
+manual_text = st.text_area('Ou cole o texto da peça aqui', height=170)
 analyze = st.button('Analisar peça', type='primary', use_container_width=True)
 
 if analyze:
@@ -116,7 +158,7 @@ if analyze:
     citations = extract_citations_with_context(piece_text)
     thesis_blocks = split_into_argument_blocks(piece_text, max_blocks=max_blocks)
 
-    with st.spinner('Auditando a peça, conferindo citações e refinando teses...'):
+    with st.spinner('Auditando a peça premium...'):
         citation_results = [cached_validate(db_paths, cit, top_k) for cit in citations]
         thesis_results = []
         used_numbers = {r['correcao_sugerida']['numero_acordao'] for r in citation_results if r.get('correcao_sugerida')}
@@ -127,15 +169,18 @@ if analyze:
             suggestions = cached_search(db_paths, block['texto'], block['tese_chave'], top_k)
             suggestions = [s for s in suggestions if s.get('numero_acordao') not in used_numbers][:top_k]
             if suggestions:
+                best_score = 0.0
                 for sug in suggestions:
                     sug['paragrafo_aplicado'] = build_thesis_paragraph(sug, block['tese'])
                     used_numbers.add(sug.get('numero_acordao'))
+                    best_score = max(best_score, float(sug.get('compat_score', 0.0)))
                 thesis_results.append({
                     'tese': block['tese'],
                     'tese_chave': block['tese_chave'],
                     'trecho_curto': block['preview'],
                     'fundamentos': block.get('fundamentos', ''),
                     'sugestoes': suggestions[:2],
+                    'score_tese': round(best_score, 4),
                 })
             if len(thesis_results) >= 2:
                 break
@@ -143,12 +188,21 @@ if analyze:
     validas = sum(1 for x in citation_results if x['status'] == 'valida_compatível')
     revisao = sum(1 for x in citation_results if x['status'] in {'valida_pouco_compativel', 'divergente', 'nao_localizada'})
     corrected_text = build_revised_text(piece_text, {'piece_type': piece_type, 'citation_results': citation_results, 'thesis_results': thesis_results})
-
     analysis = {
         'piece_type': piece_type,
         'citation_results': citation_results,
         'thesis_results': thesis_results,
     }
+
+    st.session_state.analysis_history.insert(0, {
+        'timestamp': datetime.now().strftime('%d/%m/%Y %H:%M'),
+        'arquivo': file_name,
+        'tipo': piece_type['tipo'],
+        'validas': validas,
+        'revisao': revisao,
+        'teses': len(thesis_results),
+    })
+    st.session_state.analysis_history = st.session_state.analysis_history[:10]
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric('Tipo da peça', piece_type['tipo'])
@@ -156,75 +210,95 @@ if analyze:
     c3.metric('Citações para revisão', revisao)
     c4.metric('Teses prontas para uso', len(thesis_results))
 
-    st.markdown(
-        f"<div class='card'><div class='panel-title'>Leitura estrutural da peça</div><div class='soft'>Classificação com confiança <strong>{piece_type['confianca']}</strong>. O sistema identificou a peça por sinais estruturais como: {piece_type['fundamentos']}.</div></div>",
-        unsafe_allow_html=True,
-    )
-
-    tabs = st.tabs(['Resumo executivo', 'Citações encontradas', 'Teses aplicadas', 'Download da peça corrigida'])
+    tabs = st.tabs(['Resumo premium', 'Citações auditadas', 'Teses aplicadas', 'Comparação', 'Histórico', 'Downloads'])
 
     with tabs[0]:
-        st.markdown('### Diagnóstico objetivo')
+        st.markdown("### Leitura executiva")
         st.markdown(
-            f"- A peça foi classificada como **{piece_type['tipo']}**.\n"
-            f"- Foram encontradas **{len(citation_results)}** citações de acórdão.\n"
-            f"- **{validas}** citações ficaram compatíveis com o contexto.\n"
-            f"- **{revisao}** citações exigem revisão, correção ou nova validação.\n"
-            f"- O sistema preparou **{len(thesis_results)}** teses curtas para reforço argumentativo."
+            f"<div class='premium-box'><div class='small'><strong>Tipo identificado:</strong> {piece_type['tipo']} · confiança <strong>{piece_type['confianca']}</strong>.<br>"
+            f"<strong>Base da identificação:</strong> {piece_type['fundamentos']}.<br>"
+            f"<strong>Diagnóstico:</strong> {validas} citações ficaram compatíveis; {revisao} exigem revisão; {len(thesis_results)} teses foram convertidas em reforços curtos prontos para uso.</div></div>",
+            unsafe_allow_html=True,
         )
-        st.info('O fluxo desta versão prioriza primeiro a auditoria da citação já usada na peça. Depois, acrescenta teses curtas e aplicáveis para reforço.')
+        st.markdown("### Radar de risco")
+        if citation_results:
+            low = sum(1 for x in citation_results if x.get('risco') == 'baixo')
+            med = sum(1 for x in citation_results if x.get('risco') == 'médio')
+            high = sum(1 for x in citation_results if x.get('risco') == 'alto')
+            a, b, c = st.columns(3)
+            a.metric('Baixo risco', low)
+            b.metric('Risco moderado', med)
+            c.metric('Alto risco', high)
+        else:
+            st.info('Nenhuma citação de acórdão foi encontrada para compor o radar de risco.')
 
     with tabs[1]:
         if not citation_results:
             st.info('Nenhuma citação de acórdão foi localizada automaticamente.')
         else:
             for item in citation_results:
-                badge = 'badge-good' if item['status'] == 'valida_compatível' else 'badge-warn' if item['status'] == 'valida_pouco_compativel' else 'badge-bad'
+                title, color, bg = risk_style(item.get('risco', 'alto'))
+                tone = 'good' if item['status'] == 'valida_compatível' else 'warn' if item['status'] == 'valida_pouco_compativel' else 'bad'
                 with st.container(border=True):
-                    st.markdown(f"<span class='{badge}'>{item['status_label']}</span>", unsafe_allow_html=True)
+                    st.markdown(badge_html(item['status_label'], tone), unsafe_allow_html=True)
+                    st.markdown(f"&nbsp;{badge_html(title, 'info' if item.get('risco') == 'baixo' else 'warn' if item.get('risco') == 'médio' else 'bad')}", unsafe_allow_html=True)
                     st.markdown(f"**Citação localizada na peça:** {item['raw']}")
-                    st.caption(f"Linha aproximada: {item.get('linha','-')} · Tese percebida: {item.get('tese','Tese geral')}")
+                    st.caption(f"Linha aproximada: {item.get('linha','-')} · Tese percebida: {item.get('tese','Tese geral')} · Score de contexto: {item.get('score_contexto',0):.2f}")
                     if item.get('matched_record'):
                         rec = item['matched_record']
-                        st.markdown(f"<span class='tag'>{rec['numero_acordao']}</span><span class='tag'>{rec['colegiado']}</span>", unsafe_allow_html=True)
-                        st.write(rec['citacao_curta'])
+                        st.write(f"**Correspondência encontrada:** {rec.get('citacao_curta','')}")
                     if item.get('correcao_sugerida'):
                         cor = item['correcao_sugerida']
-                        st.markdown('**Correção automática sugerida pelo sistema**')
-                        st.success(f"TCU, Acórdão nº {cor.get('numero_acordao')} - {cor.get('colegiado')}")
-                        st.caption(cor.get('citacao_curta', ''))
-                    elif item.get('alternativas'):
-                        st.markdown('**Alternativas compatíveis**')
+                        st.write(f"**Correção sugerida:** {cor.get('citacao_curta','')}")
+                        st.code(item.get('substituicao_textual',''), language='text')
+                    if item.get('alternativas'):
+                        st.write('**Alternativas úteis:**')
                         for alt in item['alternativas'][:2]:
-                            st.markdown(f"- {alt['citacao_curta']}")
-                    ctx = item.get('contexto','')
-                    if ctx:
-                        st.caption('Trecho auditado: ' + ctx[:360] + ('...' if len(ctx) > 360 else ''))
+                            st.write(f"- {alt.get('citacao_curta','')}")
 
     with tabs[2]:
         if not thesis_results:
-            st.info('Nenhuma tese relevante recebeu sugestão segura.')
+            st.info('Nenhuma tese com aderência suficiente foi convertida em reforço útil.')
         else:
-            for item in thesis_results:
+            for thesis in thesis_results:
+                score_pct = min(100, int(float(thesis.get('score_tese', 0.0)) * 180))
                 with st.container(border=True):
-                    st.markdown(f"### {item['tese']}")
-                    st.caption(f"Fundamentos detectados: {item.get('fundamentos','tese jurídica principal')}")
-                    st.write(item['trecho_curto'])
-                    for idx, sug in enumerate(item['sugestoes'][:2], start=1):
-                        st.markdown(f"**Tese aplicada {idx}**")
-                        st.success(sug['paragrafo_aplicado'])
-                        st.caption(sug['citacao_curta'])
+                    st.markdown(f"### {thesis['tese']}")
+                    st.markdown(f"<div class='small'><strong>Trecho lido:</strong> {thesis['trecho_curto']}</div>", unsafe_allow_html=True)
+                    st.markdown(f"<div class='small'><strong>Sinais da tese:</strong> {thesis.get('fundamentos','-')}</div>", unsafe_allow_html=True)
+                    st.markdown(f"<div class='small'><strong>Qualidade do match:</strong> {thesis_quality_label(float(thesis.get('score_tese',0.0)))} </div>", unsafe_allow_html=True)
+                    st.markdown(f"<div class='scorebar'><div class='scorefill' style='width:{score_pct}%'></div></div>", unsafe_allow_html=True)
+                    for sug in thesis['sugestoes'][:2]:
+                        st.write(f"**Acórdão sugerido:** {sug.get('citacao_curta','')}")
+                        st.code(sug.get('paragrafo_aplicado',''), language='text')
 
     with tabs[3]:
-        rows = build_export_rows(analysis)
-        df = pd.DataFrame(rows)
-        st.dataframe(df, use_container_width=True)
-        report_md = build_markdown_report(file_name, analysis)
-        docx_bytes = build_docx_bytes(corrected_text, analysis, title='Peça corrigida pelo Atlas de Acórdãos MS')
-        pdf_bytes = build_pdf_bytes(corrected_text, analysis, title='Peça corrigida pelo Atlas de Acórdãos MS')
-        st.download_button('Baixar peça corrigida em DOCX', docx_bytes, 'peca_corrigida_atlas_ms.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', use_container_width=True)
-        st.download_button('Baixar peça corrigida em PDF', pdf_bytes, 'peca_corrigida_atlas_ms.pdf', 'application/pdf', use_container_width=True)
-        st.download_button('Baixar relatório em Markdown', report_md.encode('utf-8'), 'relatorio_atlas_acordaos.md', 'text/markdown', use_container_width=True)
-        st.download_button('Baixar relatório em CSV', df.to_csv(index=False).encode('utf-8'), 'relatorio_atlas_acordaos.csv', 'text/csv', use_container_width=True)
+        st.markdown("### Comparação entre a peça original e a versão corrigida")
+        st.markdown("<div class='small'>Trechos em verde representam acréscimos ou substituições úteis. Trechos em vermelho representam conteúdo substituído na versão revisada.</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='compare-box'>{diff_html(piece_text, corrected_text)}</div>", unsafe_allow_html=True)
 
-    st.warning('Ferramenta de apoio técnico-jurídico. Antes do protocolo, confirme a aderência final do precedente e a fidelidade do trecho aproveitado.')
+    with tabs[4]:
+        st.markdown('### Histórico da sessão')
+        if st.session_state.analysis_history:
+            st.dataframe(pd.DataFrame(st.session_state.analysis_history), use_container_width=True, hide_index=True)
+        else:
+            st.info('Ainda não há histórico de análises nesta sessão.')
+
+    with tabs[5]:
+        rows = build_export_rows(analysis)
+        csv_bytes = pd.DataFrame(rows).to_csv(index=False).encode('utf-8-sig') if rows else b''
+        md_report = build_markdown_report(file_name, analysis).encode('utf-8')
+        docx_bytes = build_docx_bytes(corrected_text, analysis, title='Peça revisada premium')
+        pdf_bytes = build_pdf_bytes(corrected_text, analysis, title='Peça revisada premium')
+
+        d1, d2, d3, d4 = st.columns(4)
+        with d1:
+            st.download_button('Baixar peça corrigida (.docx)', data=docx_bytes, file_name='peca_corrigida_premium.docx', mime='application/vnd.openxmlformats-officedocument.wordprocessingml.document', use_container_width=True)
+        with d2:
+            st.download_button('Baixar peça corrigida (.pdf)', data=pdf_bytes, file_name='peca_corrigida_premium.pdf', mime='application/pdf', use_container_width=True)
+        with d3:
+            st.download_button('Baixar relatório (.md)', data=md_report, file_name='relatorio_premium.md', mime='text/markdown', use_container_width=True)
+        with d4:
+            st.download_button('Baixar planilha (.csv)', data=csv_bytes, file_name='relatorio_premium.csv', mime='text/csv', use_container_width=True)
+
+        st.text_area('Prévia da peça corrigida', corrected_text[:5000], height=260)
