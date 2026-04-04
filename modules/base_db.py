@@ -23,8 +23,7 @@ def open_db(db_path: Path) -> sqlite3.Connection:
 
 @lru_cache(maxsize=128)
 def detect_schema(db_path_str: str) -> str:
-    db_path = Path(db_path_str)
-    conn = open_db(db_path)
+    conn = open_db(Path(db_path_str))
     try:
         tables = {r['name'] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
         if 'records' in tables:
@@ -38,8 +37,7 @@ def detect_schema(db_path_str: str) -> str:
 
 @lru_cache(maxsize=256)
 def get_table_columns(db_path_str: str, table_name: str) -> List[str]:
-    db_path = Path(db_path_str)
-    conn = open_db(db_path)
+    conn = open_db(Path(db_path_str))
     try:
         rows = conn.execute(f'PRAGMA table_info({table_name})').fetchall()
         return [r['name'] for r in rows]
@@ -51,17 +49,17 @@ def _normalize_tags(raw: Any) -> List[str]:
     if raw is None:
         return []
     if isinstance(raw, list):
-        return [str(x).strip() for x in raw if str(x).strip()]
+        return [str(x).strip().lower() for x in raw if str(x).strip()]
     txt = str(raw).strip()
     if not txt:
         return []
     try:
         parsed = json.loads(txt)
         if isinstance(parsed, list):
-            return [str(x).strip() for x in parsed if str(x).strip()]
+            return [str(x).strip().lower() for x in parsed if str(x).strip()]
     except Exception:
         pass
-    return [x.strip() for x in txt.split(',') if x.strip()]
+    return [x.strip().lower() for x in txt.split(',') if x.strip()]
 
 
 def normalize_row(row: sqlite3.Row | Dict[str, Any], schema: str) -> Dict[str, Any]:
@@ -84,7 +82,7 @@ def normalize_row(row: sqlite3.Row | Dict[str, Any], schema: str) -> Dict[str, A
             'decisao': item.get('decisao', ''),
             'url_oficial': item.get('url_oficial', ''),
             'status': item.get('status', ''),
-            'tags': _normalize_tags(item.get('tags_json', '')),
+            'tags': _normalize_tags(item.get('tags_json', item.get('tags', ''))),
         }
     else:
         item['tags'] = _normalize_tags(item.get('tags', ''))
@@ -94,64 +92,35 @@ def normalize_row(row: sqlite3.Row | Dict[str, Any], schema: str) -> Dict[str, A
 def summarize_bases(base_dir: Path) -> Dict[str, Any]:
     dbs = find_db_files(base_dir)
     total_registros = 0
-    anos = []
-    detalhes = []
     for db in dbs:
         schema = detect_schema(str(db))
+        conn = open_db(db)
         try:
-            conn = open_db(db)
             if schema == 'records':
-                row = conn.execute('SELECT ano, total_registros FROM metadata LIMIT 1').fetchone()
-                if row:
-                    ano = str(row['ano'])
-                    total = int(row['total_registros'] or 0)
-                else:
-                    ano = db.stem[-4:]
-                    total = conn.execute('SELECT COUNT(*) AS c FROM records').fetchone()['c']
+                row = conn.execute('SELECT COUNT(*) AS c FROM records').fetchone()
             elif schema == 'acordaos':
-                cols = get_table_columns(str(db), 'metadata')
-                if cols and 'chave' in cols and 'valor' in cols:
-                    meta = {r['chave']: r['valor'] for r in conn.execute('SELECT chave, valor FROM metadata').fetchall()}
-                    ano = str(meta.get('ano', db.stem[-4:]))
-                    total = int(meta.get('total_registros', 0) or 0)
-                else:
-                    row = conn.execute('SELECT COUNT(*) AS c, MIN(ano_acordao) AS ano FROM acordaos').fetchone()
-                    ano = str(row['ano'] or db.stem[-4:])
-                    total = int(row['c'] or 0)
-                if not total:
-                    total = conn.execute('SELECT COUNT(*) AS c FROM acordaos').fetchone()['c']
+                row = conn.execute('SELECT COUNT(*) AS c FROM acordaos').fetchone()
             else:
-                ano = '?'
-                total = 0
-            total_registros += total
-            if ano and ano != '?':
-                anos.append(ano)
-            detalhes.append({'arquivo': db.name, 'ano': ano, 'total_registros': total, 'schema': schema})
+                row = {'c': 0}
+            total_registros += int(row['c'] or 0)
+        finally:
             conn.close()
-        except Exception:
-            detalhes.append({'arquivo': db.name, 'ano': '?', 'total_registros': 0, 'schema': 'erro'})
-    anos = sorted({a for a in anos if a})
-    return {
-        'total_bases': len(dbs),
-        'total_registros': total_registros,
-        'anos': anos,
-        'detalhes': detalhes,
-    }
+    return {'total_registros': total_registros, 'total_bases': len(dbs)}
 
 
 def exact_lookup(db_files: Iterable[Path], numero: str, ano: str | None = None) -> Dict[str, Any] | None:
     if not numero:
         return None
     for db in db_files:
-        conn = open_db(db)
         schema = detect_schema(str(db))
+        table = 'records' if schema == 'records' else 'acordaos' if schema == 'acordaos' else None
+        if not table:
+            continue
+        cols = set(get_table_columns(str(db), table))
+        if 'numero_acordao_num' not in cols:
+            continue
+        conn = open_db(db)
         try:
-            table = 'records' if schema == 'records' else 'acordaos' if schema == 'acordaos' else None
-            if not table:
-                continue
-            cols = set(get_table_columns(str(db), table))
-            if 'numero_acordao_num' not in cols:
-                continue
             if ano and 'ano_acordao' in cols:
                 row = conn.execute(
                     f'SELECT * FROM {table} WHERE numero_acordao_num = ? AND ano_acordao = ? LIMIT 1',
