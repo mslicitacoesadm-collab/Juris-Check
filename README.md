@@ -1,16 +1,5 @@
 # Validador de Autoridade Jurídica
 
-Esta versão suporta **dois formatos de base SQLite**:
-
-1. **Novo formato**: tabelas `records` e `records_fts`
-2. **Formato legado**: tabela `acordaos` sem FTS
-
-Se seus bancos foram gerados pela versão antiga, o sistema continua funcionando.
-
-Para melhor desempenho, regenere as bases com `tools/build_year_dbs.py` quando puder.
-
-# Validador de Autoridade Jurídica
-
 ## Solução adotada
 
 A abordagem correta para o Streamlit Cloud é **não carregar vários JSONs diretamente no app**.
