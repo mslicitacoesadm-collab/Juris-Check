@@ -13,6 +13,8 @@ def build_export_rows(analysis: Dict[str, Any]) -> List[Dict[str, Any]]:
             'acordao_validado': (item.get('matched_record') or {}).get('numero_acordao', ''),
             'correcao_sugerida': (item.get('correcao_sugerida') or {}).get('numero_acordao', ''),
             'tese': item.get('tese', ''),
+            'risco': item.get('risco', ''),
+            'score_contexto': item.get('score_contexto', ''),
         })
     for item in analysis.get('thesis_results', []):
         for idx, sug in enumerate(item.get('sugestoes', [])[:2], start=1):
@@ -23,6 +25,8 @@ def build_export_rows(analysis: Dict[str, Any]) -> List[Dict[str, Any]]:
                 'acordao_validado': '',
                 'correcao_sugerida': sug.get('numero_acordao', ''),
                 'tese': item.get('tese', ''),
+                'risco': sug.get('risco', ''),
+                'score_contexto': sug.get('compat_score', ''),
             })
     return rows
 
@@ -30,7 +34,7 @@ def build_export_rows(analysis: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 def build_markdown_report(file_name: str, analysis: Dict[str, Any]) -> str:
     lines = [
-        '# Relatório de validação jurisprudencial',
+        '# Relatório premium de validação jurisprudencial',
         '',
         f'**Arquivo analisado:** {file_name}',
         '',
@@ -40,7 +44,7 @@ def build_markdown_report(file_name: str, analysis: Dict[str, Any]) -> str:
         '## Citações auditadas',
     ]
     for item in analysis.get('citation_results', []):
-        lines.append(f"- `{item.get('raw','')}` → **{item.get('status_label','')}**")
+        lines.append(f"- `{item.get('raw','')}` → **{item.get('status_label','')}** · risco: **{item.get('risco','-')}**")
         if item.get('correcao_sugerida'):
             lines.append(f"  - Correção sugerida: {item['correcao_sugerida'].get('numero_acordao','')} ({item['correcao_sugerida'].get('colegiado','')})")
     lines.append('')

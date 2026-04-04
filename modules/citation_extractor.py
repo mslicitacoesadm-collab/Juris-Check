@@ -13,7 +13,7 @@ CITATION_PATTERNS = [
 PIECE_SIGNAL_MAP = {
     'recurso': {
         'positive': [
-            (r'interpor o presente recurso administrativo', 5),
+            (r'interpor o presente recurso administrativo', 6),
             (r'recurso administrativo', 4),
             (r'decis[aã]o recorrida', 4),
             (r'provimento do recurso', 3),
@@ -21,53 +21,58 @@ PIECE_SIGNAL_MAP = {
             (r'ato recorrido', 3),
             (r'recorrente', 2),
             (r'raz[oõ]es recursais', 3),
+            (r'reforma da desclassifica[cç][aã]o', 3),
         ],
         'negative': [
-            (r'contrarraz[õo]es', -6),
-            (r'n[aã]o provimento do recurso', -4),
-            (r'impugna[cç][aã]o ao edital', -6),
+            (r'contrarraz[õo]es', -8),
+            (r'n[aã]o provimento do recurso', -6),
+            (r'impugna[cç][aã]o ao edital', -7),
+            (r'manuten[cç][aã]o da decis[aã]o recorrida', -5),
         ],
     },
     'contrarrazao': {
         'positive': [
-            (r'apresenta\s+contrarraz[õo]es', 6),
-            (r'contrarraz[õo]es', 6),
+            (r'apresenta\s+contrarraz[õo]es', 8),
+            (r'contrarraz[õo]es', 7),
             (r'em face do recurso interposto', 5),
-            (r'n[aã]o provimento do recurso', 5),
-            (r'manuten[cç][aã]o da decis[aã]o', 5),
-            (r'manter a decis[aã]o recorrida', 4),
-            (r'recorrido', 3),
-            (r'impugna os argumentos recursais', 3),
+            (r'n[aã]o provimento do recurso', 7),
+            (r'manuten[cç][aã]o da decis[aã]o', 7),
+            (r'manter a decis[aã]o recorrida', 5),
+            (r'recorrido', 4),
+            (r'impugna os argumentos recursais', 4),
+            (r'improcede o recurso', 4),
+            (r'rejei[cç][aã]o do recurso', 4),
         ],
         'negative': [
-            (r'interpor o presente recurso administrativo', -6),
-            (r'impugna[cç][aã]o ao edital', -6),
+            (r'interpor o presente recurso administrativo', -8),
+            (r'impugna[cç][aã]o ao edital', -7),
         ],
     },
     'impugnacao': {
         'positive': [
-            (r'impugna[cç][aã]o ao edital', 7),
-            (r'impugnar o edital', 6),
-            (r'cl[aá]usula restritiva', 4),
-            (r'retifica[cç][aã]o do edital', 5),
-            (r'suspens[aã]o do certame', 4),
+            (r'impugna[cç][aã]o ao edital', 9),
+            (r'impugnar o edital', 7),
+            (r'cl[aá]usula restritiva', 5),
+            (r'retifica[cç][aã]o do edital', 6),
+            (r'suspens[aã]o do certame', 5),
             (r'ilegalidade do instrumento convocat[oó]rio', 5),
-            (r'edital deve ser retificado', 4),
+            (r'edital deve ser retificado', 5),
+            (r'exig[eê]ncia n[aã]o prevista no edital', 4),
         ],
         'negative': [
-            (r'contrarraz[õo]es', -7),
+            (r'contrarraz[õo]es', -8),
             (r'decis[aã]o recorrida', -3),
-            (r'provimento do recurso', -3),
+            (r'provimento do recurso', -4),
         ],
     },
 }
 
 THESIS_KEYWORDS = {
     'formalismo_moderado': ['formalismo moderado', 'erro formal', 'v[ií]cio san[aá]vel', 'falha formal', 'baixa materialidade'],
-    'diligencia': ['dilig[eê]ncia', 'saneamento', 'oportunidade de comprova[cç][aã]o', 'esclarecimentos', 'sanar'],
+    'diligencia': ['dilig[eê]ncia', 'saneamento', 'oportunidade de comprova[cç][aã]o', 'esclarecimentos', 'sanar', 'franqueada oportunidade'],
     'inexequibilidade': ['inexequ[ií]vel', 'inexequibilidade', 'exequibilidade', 'proposta inexequ[ií]vel'],
     'vinculacao_edital': ['vincula[cç][aã]o ao edital', 'instrumento convocat[oó]rio', 'exig[eê]ncia n[aã]o prevista', 'n[aã]o prevista no edital'],
-    'competitividade': ['competitividade', 'ampla disputa', 'restri[cç][aã]o indevida', 'redu[cç][aã]o da competitividade'],
+    'competitividade': ['competitividade', 'ampla disputa', 'restri[cç][aã]o indevida', 'redu[cç][aã]o da competitividade', 'proposta mais vantajosa'],
     'habilitacao_capacidade': ['habilita[cç][aã]o', 'capacidade t[eé]cnica', 'atestado', 'qualifica[cç][aã]o t[eé]cnica'],
     'julgamento_objetivo': ['julgamento objetivo', 'crit[eé]rio subjetivo', 'subjetiva', 'razoabilidade', 'proporcionalidade'],
 }
@@ -86,6 +91,7 @@ THESIS_LABEL_MAP = {
 USELESS_BLOCK_PATTERNS = [
     r'da tempestividade', r'do cabimento', r'dos pedidos', r'nestes termos', r'pede deferimento',
     r'qualifica[cç][aã]o da parte', r'ao ilustri', r'secret[aá]rio', r'síntese dos fatos', r'da ausência de prejuízo',
+    r'da tempestividade e do cabimento', r'da s[íi]ntese dos fatos', r'vi\.? dos pedidos'
 ]
 
 
@@ -103,27 +109,18 @@ def classify_piece_type(text: str) -> Dict[str, str | int]:
         for pat, weight in rules['positive']:
             if re.search(pat, lower, re.I):
                 scores[kind] += weight
-                hits[kind].append(pat)
+                hits[kind].append(re.sub(r'\\', '', pat))
         for pat, weight in rules['negative']:
             if re.search(pat, lower, re.I):
                 scores[kind] += weight
-
-    # Structural hints
-    if 'iii. da fundamentação' in lower or 'da fundamentação jurídica' in lower:
-        scores['recurso'] += 1
-        scores['contrarrazao'] += 1
-    if 'decisão recorrida' in lower and 'contrarraz' in lower:
-        scores['contrarrazao'] += 2
-    if 'edital' in lower and 'certame' in lower and 'impugna' in lower:
-        scores['impugnacao'] += 2
 
     ordered = sorted(scores.items(), key=lambda x: x[1], reverse=True)
     best, best_score = ordered[0]
     second_score = ordered[1][1] if len(ordered) > 1 else 0
     delta = best_score - second_score
-    confidence = 'alta' if best_score >= 7 and delta >= 3 else 'média' if best_score >= 4 else 'baixa'
+    confidence = 'alta' if best_score >= 8 and delta >= 3 else 'média' if best_score >= 4 else 'baixa'
     labels = {'recurso': 'Recurso administrativo', 'contrarrazao': 'Contrarrazão', 'impugnacao': 'Impugnação'}
-    fundamentos = ', '.join(hits[best][:4]) or 'classificação por estrutura textual'
+    fundamentos = ', '.join(hits[best][:5]) or 'classificação por estrutura textual'
     return {
         'tipo': labels[best],
         'chave': best,
@@ -174,7 +171,7 @@ def detect_thesis(text: str) -> Dict[str, str | int]:
         for pat in patterns:
             if re.search(pat, lower, re.I):
                 score += 2
-                matched.append(pat)
+                matched.append(re.sub(r'\\', '', pat))
         scores[thesis] = score
         hits[thesis] = matched
     if not scores:
@@ -199,7 +196,7 @@ def split_into_argument_blocks(text: str, max_blocks: int = 12) -> List[Dict[str
             current = [line]
         else:
             current.append(line)
-        if len(' '.join(current)) > 900:
+        if len(' '.join(current)) > 1000:
             blocks.append(normalize_space(' '.join(current)))
             current = []
     if current:
@@ -222,6 +219,7 @@ def split_into_argument_blocks(text: str, max_blocks: int = 12) -> List[Dict[str
             'tese_chave': thesis['chave'],
             'preview': preview,
             'fundamentos': ', '.join(thesis['fundamentos'][:3]),
+            'score_tese': thesis['score'],
         })
         if len(results) >= max_blocks:
             break
@@ -233,7 +231,6 @@ def short_quote_from_text(text: str, max_chars: int = 240) -> str:
     text = normalize_space(text)
     if not text:
         return ''
-    # prefer quoted or first sentence-like segment
     first_sentence = re.split(r'(?<=[\.!?;])\s+', text)[0]
     if 60 <= len(first_sentence) <= max_chars:
         return first_sentence
