@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import json
 import re
+import sqlite3
 from heapq import nlargest
 from pathlib import Path
 from typing import Dict, Iterable, List, Sequence, Tuple
 
-from .base_db import detect_schema, open_db
+from .base_db import detect_schema, get_table_columns, normalize_row, open_db
 
 STOPWORDS = {
     'de','da','do','das','dos','e','em','para','por','com','sem','na','no','nas','nos','ao','aos',
@@ -81,8 +82,11 @@ def parse_tags(raw_tags) -> List[str]:
 
 
 def row_text(row: Dict) -> str:
-    pieces = [row.get('titulo', ''), row.get('assunto', ''), row.get('sumario', ''), row.get('ementa_match', ''), row.get('decisao', ''), row.get('tags', ''), row.get('tags_json', '')]
-    return normalize_text(' '.join(pieces))
+    pieces = [
+        row.get('titulo', ''), row.get('assunto', ''), row.get('sumario', ''),
+        row.get('ementa_match', ''), row.get('decisao', ''), row.get('tags', ''), row.get('tags_json', '')
+    ]
+    return normalize_text(' '.join(str(p) for p in pieces if p))
 
 
 def overlap_score(query_terms: Sequence[str], candidate_text: str, candidate_tags: Sequence[str]) -> Tuple[float, List[str]]:
@@ -110,32 +114,73 @@ def build_suggested_paragraph(item: Dict, matched_terms: Sequence[str]) -> str:
     )
 
 
-def fetch_rows(conn, schema: str, queries: Sequence[str], limit: int = 20):
+def _safe_exec(conn, sql: str, params: Sequence, fallback_sql: str | None = None, fallback_params: Sequence | None = None):
+    try:
+        return conn.execute(sql, params).fetchall()
+    except sqlite3.OperationalError:
+        if fallback_sql:
+            try:
+                return conn.execute(fallback_sql, fallback_params or params).fetchall()
+            except sqlite3.OperationalError:
+                return []
+        return []
+
+
+def fetch_rows(conn, db_path: Path, schema: str, queries: Sequence[str], limit: int = 20):
     rows = []
     if schema == 'records':
-        for q in queries:
-            rows.extend(conn.execute(
-                '''
-                SELECT r.*, bm25(records_fts) as fts_score
-                FROM records_fts
-                JOIN records r ON r.id = records_fts.id
-                WHERE records_fts MATCH ?
-                ORDER BY fts_score
-                LIMIT ?
-                ''',
-                (q, limit),
-            ).fetchall())
+        record_cols = set(get_table_columns(str(db_path), 'records'))
+        has_fts_table = bool(get_table_columns(str(db_path), 'records_fts'))
+        if has_fts_table:
+            for q in queries:
+                rows.extend(_safe_exec(
+                    conn,
+                    '''
+                    SELECT r.*, bm25(records_fts) as fts_score
+                    FROM records_fts
+                    JOIN records r ON r.id = records_fts.id
+                    WHERE records_fts MATCH ?
+                    ORDER BY fts_score
+                    LIMIT ?
+                    ''',
+                    (q, limit),
+                ))
+        if not rows:
+            text_cols = [c for c in ['titulo', 'assunto', 'sumario', 'ementa_match', 'decisao'] if c in record_cols]
+            if not text_cols:
+                return rows
+            for q in queries:
+                like_terms = [t.strip('" ') for t in q.replace(' AND ', ' ').replace(' OR ', ' ').split() if t.strip('" ')]
+                if not like_terms:
+                    continue
+                clauses = []
+                params = []
+                for term in like_terms[:6]:
+                    piece = ' OR '.join([f'{c} LIKE ?' for c in text_cols])
+                    clauses.append(f'({piece})')
+                    params.extend([f'%{term}%'] * len(text_cols))
+                sql = f"SELECT *, 0.0 as fts_score FROM records WHERE {' OR '.join(clauses)} LIMIT ?"
+                params.append(limit)
+                rows.extend(_safe_exec(conn, sql, params))
+
     elif schema == 'acordaos':
+        acordao_cols = set(get_table_columns(str(db_path), 'acordaos'))
+        text_cols = [c for c in ['titulo', 'assunto', 'sumario', 'ementa_match', 'decisao', 'tags_json'] if c in acordao_cols]
+        if not text_cols:
+            return rows
         for q in queries:
             like_terms = [t.strip('" ') for t in q.replace(' AND ', ' ').replace(' OR ', ' ').split() if t.strip('" ')]
-            where = ' OR '.join(['(titulo LIKE ? OR assunto LIKE ? OR sumario LIKE ? OR ementa_match LIKE ? OR decisao LIKE ? OR tags_json LIKE ?)'] * len(like_terms))
+            if not like_terms:
+                continue
+            clauses = []
             params = []
-            for term in like_terms:
-                val = f'%{term}%'
-                params.extend([val, val, val, val, val, val])
-            sql = f'''SELECT *, 0.0 as fts_score FROM acordaos WHERE {where} LIMIT ?'''
+            for term in like_terms[:6]:
+                piece = ' OR '.join([f'{c} LIKE ?' for c in text_cols])
+                clauses.append(f'({piece})')
+                params.extend([f'%{term}%'] * len(text_cols))
+            sql = f"SELECT *, 0.0 as fts_score FROM acordaos WHERE {' OR '.join(clauses)} LIMIT ?"
             params.append(limit)
-            rows.extend(conn.execute(sql, params).fetchall())
+            rows.extend(_safe_exec(conn, sql, params))
     return rows
 
 
@@ -152,12 +197,13 @@ def search_candidates(db_files: Iterable[Path], query_text: str, top_k: int = 3)
             continue
         conn = open_db(db)
         try:
-            for row in fetch_rows(conn, schema, queries, limit=20):
+            for row in fetch_rows(conn, db, schema, queries, limit=20):
                 item = dict(row)
                 item['fts_score'] = float(item.get('fts_score') or 0.0)
-                existing = raw_candidates.get(item['id'])
+                key = item.get('id') or f"{db.name}:{item.get('numero_acordao','')}:{item.get('processo','')}"
+                existing = raw_candidates.get(key)
                 if existing is None or item['fts_score'] < existing['fts_score']:
-                    raw_candidates[item['id']] = item
+                    raw_candidates[key] = item
         finally:
             conn.close()
 
@@ -171,6 +217,7 @@ def search_candidates(db_files: Iterable[Path], query_text: str, top_k: int = 3)
         relevance = overlap - theme_penalty(query_terms, matched_terms) - min(abs(float(item.get('fts_score', 0.0))) / 25.0, 0.35)
         if relevance < 0.22:
             continue
+        item = normalize_row(item, 'acordaos' if 'tags_json' in item else 'records')
         item['matched_terms'] = matched_terms
         item['relevance'] = round(relevance, 3)
         item['paragrafo_sugerido'] = build_suggested_paragraph(item, matched_terms)
