@@ -1,34 +1,24 @@
-# Atlas de Acórdãos V3
+# Atlas de Acórdãos V4
 
-Versão com leitura por tese jurídica para recurso, contrarrazão e impugnação.
+Versão com:
+- classificação mais robusta entre recurso, contrarrazão e impugnação
+- validação do acórdão já citado na peça
+- verificação de compatibilidade contextual
+- correção sugerida quando o número não bate ou o uso é fraco
+- sugestões curtas por tese jurídica
 
-## O que mudou na V3
+## Estrutura esperada
 
-- leitura da peça por **tese jurídica**
-- menos ruído visual
-- sugestões curtas em formato aproveitável
-- compatibilidade com bases SQLite heterogêneas
-- estrutura pronta para GitHub + Streamlit
+Coloque seus bancos SQLite em:
 
-## Como aplicar
+`data/base/`
 
-1. extraia este pacote
-2. mantenha seus bancos `.db` em `data/base/`
-3. suba a pasta para o GitHub
-4. publique no Streamlit apontando para `app.py`
+## Executar localmente
 
-## Estrutura esperada da base
-
-Coloque os bancos em:
-
-```text
-data/base/acordaos_2016.db
-data/base/acordaos_2017.db
-...
+```bash
+streamlit run app.py
 ```
 
-## Observações
+## Deploy
 
-- o sistema trabalha com **acórdãos do TCU**
-- a sugestão é de apoio e deve ser validada antes do protocolo
-- quando a aderência for fraca, o sistema prefere não sugerir
+Suba o conteúdo desta pasta para o GitHub e publique apontando para `app.py`.
