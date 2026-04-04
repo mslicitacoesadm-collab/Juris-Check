@@ -1,62 +1,34 @@
-# Validador de Autoridade Jurídica
+# Atlas de Acórdãos V3
 
-## Solução adotada
+Versão com leitura por tese jurídica para recurso, contrarrazão e impugnação.
 
-A abordagem correta para o Streamlit Cloud é **não carregar vários JSONs diretamente no app**.
+## O que mudou na V3
 
-Em vez disso, este projeto usa:
-
-- **1 banco SQLite por ano** em `data/base/`
-- **FTS5 do SQLite** para busca textual rápida
-- **consulta sob demanda**, sem carregar a base inteira em memória
-
-Isso evita o erro clássico de boot quando a base JSON fica pesada demais.
-
-## Estrutura esperada
-
-```text
-app.py
-modules/
-tools/
-data/
-  base/
-    acordaos_2016.db
-    acordaos_2017.db
-    ...
-```
+- leitura da peça por **tese jurídica**
+- menos ruído visual
+- sugestões curtas em formato aproveitável
+- compatibilidade com bases SQLite heterogêneas
+- estrutura pronta para GitHub + Streamlit
 
 ## Como aplicar
 
-### 1. Extraia sua base localmente
-Seu arquivo atual está em `.rar`. O ideal é extrair no seu computador para uma pasta com os JSONs essenciais.
+1. extraia este pacote
+2. mantenha seus bancos `.db` em `data/base/`
+3. suba a pasta para o GitHub
+4. publique no Streamlit apontando para `app.py`
 
-### 2. Gere os bancos SQLite por ano
-No Windows, abra o terminal na pasta do projeto e rode:
+## Estrutura esperada da base
 
-```bash
-python tools/build_year_dbs.py "CAMINHO_DOS_JSONS" "data/base"
+Coloque os bancos em:
+
+```text
+data/base/acordaos_2016.db
+data/base/acordaos_2017.db
+...
 ```
 
-Exemplo:
+## Observações
 
-```bash
-python tools/build_year_dbs.py "C:\base_json" "data\base"
-```
-
-### 3. Suba para o GitHub
-Depois de gerar, suba os arquivos `acordaos_YYYY.db` para `data/base/`.
-
-### 4. Publique no Streamlit
-Aponte o deploy para `app.py`.
-
-## Por que isso funciona melhor
-
-- o app abre leve
-- a base não é toda carregada em RAM
-- a busca é feita direto no banco
-- você evita dezenas de JSONs sendo processados no boot
-- cada ano vira um arquivo mais organizado e mais previsível para deploy
-
-## Observação importante
-
-O Streamlit Cloud normalmente lida melhor com alguns `.db` bem organizados do que com dezenas de `.json` grandes carregados em memória.
+- o sistema trabalha com **acórdãos do TCU**
+- a sugestão é de apoio e deve ser validada antes do protocolo
+- quando a aderência for fraca, o sistema prefere não sugerir
