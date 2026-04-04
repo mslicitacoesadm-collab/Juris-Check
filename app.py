@@ -5,16 +5,12 @@ import pandas as pd
 import streamlit as st
 
 from modules.base_loader import load_acordaos, summarize_base
-from modules.piece_reader import read_uploaded_file
 from modules.citation_extractor import extract_citations, split_into_blocks
 from modules.matcher import analyze_piece, build_search_index
+from modules.piece_reader import read_uploaded_file
 from modules.report_builder import build_export_rows, build_markdown_report
 
-st.set_page_config(
-    page_title="Validador de Acórdãos e Jurisprudência",
-    page_icon="⚖️",
-    layout="wide",
-)
+st.set_page_config(page_title="Validador de Autoridade Jurídica", page_icon="⚖️", layout="wide")
 
 BASE_DIR = Path(__file__).parent
 DATA_DIR = BASE_DIR / "data" / "acordaos"
@@ -31,10 +27,9 @@ def cached_build_index(records_json: str):
     return build_search_index(records)
 
 
-st.title("⚖️ Validador de Acórdãos e Jurisprudência")
+st.title("⚖️ Validador de Autoridade Jurídica")
 st.caption(
-    "Sistema de apoio para validação de citações, sugestão de acórdãos aderentes "
-    "e reforço técnico de recursos, contrarrazões e impugnações."
+    "Sistema de apoio para validar citações, localizar divergências de numeração e sugerir acórdãos aderentes."
 )
 
 with st.sidebar:
@@ -43,8 +38,8 @@ with st.sidebar:
     min_score = st.slider("Score mínimo de similaridade", 0.0, 1.0, 0.12, 0.01)
     max_blocks = st.slider("Máximo de blocos analisados", 5, 80, 25)
     st.info(
-        "Coloque seus JSONs anuais em `data/acordaos/`."
-        "\n\nO sistema busca automaticamente arquivos `.json` e `.jsonl`."
+        "Coloque seus arquivos JSON ou JSONL em `data/acordaos/`.\n\n"
+        "O app funciona mesmo sem base carregada, mas a análise só é liberada quando a pasta tiver registros."
     )
 
 base_records = cached_load_acordaos(str(DATA_DIR))
@@ -55,15 +50,16 @@ col1.metric("Registros carregados", base_summary["total_registros"])
 col2.metric("Arquivos da base", base_summary["total_arquivos"])
 col3.metric("Anos encontrados", ", ".join(base_summary["anos"]) if base_summary["anos"] else "Nenhum")
 
+search_index = None
 if base_records:
     try:
-        vectorizer, base_matrix = cached_build_index(json.dumps(base_records, ensure_ascii=False, sort_keys=True))
+        search_index = cached_build_index(json.dumps(base_records, ensure_ascii=False, sort_keys=True))
     except Exception as exc:
         st.error("A base foi encontrada, mas houve falha ao montar o índice de busca.")
         st.exception(exc)
         st.stop()
 else:
-    vectorizer, base_matrix = None, None
+    st.warning("Nenhuma base foi carregada ainda. O app abriu normalmente, mas você precisa colocar os JSONs em `data/acordaos/`.")
 
 with st.expander("Schema esperado da base JSON"):
     st.code(
@@ -93,23 +89,13 @@ with st.expander("Schema esperado da base JSON"):
         language="json",
     )
 
-uploaded_file = st.file_uploader(
-    "Envie a peça para análise",
-    type=["pdf", "docx", "txt"],
-    help="Formatos suportados: PDF, DOCX e TXT.",
-)
-
-manual_text = st.text_area(
-    "Ou cole o texto da peça aqui",
-    height=220,
-    placeholder="Cole aqui o recurso, contrarrazão, impugnação ou manifestação...",
-)
-
+uploaded_file = st.file_uploader("Envie a peça para análise", type=["pdf", "docx", "txt"])
+manual_text = st.text_area("Ou cole o texto da peça aqui", height=220)
 analyze = st.button("Analisar peça", type="primary", use_container_width=True)
 
 if analyze:
-    if not base_records:
-        st.error("Nenhuma base encontrada em `data/acordaos/`. Coloque os JSONs antes de analisar.")
+    if not base_records or search_index is None:
+        st.error("Nenhuma base carregada. Adicione os arquivos em `data/acordaos/` antes de analisar.")
         st.stop()
 
     if uploaded_file is None and not manual_text.strip():
@@ -141,8 +127,7 @@ if analyze:
             blocks=blocks,
             citations=citations,
             base_records=base_records,
-            vectorizer=vectorizer,
-            base_matrix=base_matrix,
+            search_index=search_index,
             top_k=top_k,
             min_score=min_score,
         )
@@ -171,17 +156,13 @@ if analyze:
                     st.write(f"Status: **{item['status_label']}**")
                     if item.get("matched_record"):
                         rec = item["matched_record"]
-                        st.write(
-                            f"Base encontrada: **{rec['numero_acordao']}** • {rec['colegiado']} • Relator: {rec['relator']}"
-                        )
+                        st.write(f"Base encontrada: **{rec['numero_acordao']}** • {rec['colegiado']} • Relator: {rec['relator']}")
                         if rec.get("assunto"):
                             st.caption(rec["assunto"])
                     if item.get("suggestions"):
                         st.write("Sugestões:")
                         for sug in item["suggestions"]:
-                            st.markdown(
-                                f"- **{sug['numero_acordao']}** | {sug['colegiado']} | score `{sug['score']:.3f}`"
-                            )
+                            st.markdown(f"- **{sug['numero_acordao']}** | {sug['colegiado']} | score `{sug['score']:.3f}`")
 
     with tab3:
         if not analysis["block_results"]:
@@ -202,11 +183,10 @@ if analyze:
 
     with tab4:
         export_rows = build_export_rows(analysis)
-        if export_rows:
-            df = pd.DataFrame(export_rows)
+        df = pd.DataFrame(export_rows) if export_rows else pd.DataFrame()
+        if not df.empty:
             st.dataframe(df, use_container_width=True)
         else:
-            df = pd.DataFrame()
             st.info("Não houve linhas para exportação nesta análise.")
 
         report_md = build_markdown_report(file_name=file_name, analysis=analysis)
@@ -226,6 +206,4 @@ if analyze:
         )
 
 with st.expander("Aviso importante"):
-    st.warning(
-        "Este sistema é ferramenta de apoio. Sempre valide a citação, o contexto e a pertinência antes do protocolo da peça."
-    )
+    st.warning("Este sistema é ferramenta de apoio. Sempre valide a citação, o contexto e a pertinência antes do protocolo da peça.")
