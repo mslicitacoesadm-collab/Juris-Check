@@ -7,7 +7,7 @@ import streamlit as st
 from modules.base_loader import load_acordaos, summarize_base
 from modules.piece_reader import read_uploaded_file
 from modules.citation_extractor import extract_citations, split_into_blocks
-from modules.matcher import analyze_piece
+from modules.matcher import analyze_piece, build_search_index
 from modules.report_builder import build_export_rows, build_markdown_report
 
 st.set_page_config(
@@ -18,6 +18,18 @@ st.set_page_config(
 
 BASE_DIR = Path(__file__).parent
 DATA_DIR = BASE_DIR / "data" / "acordaos"
+
+
+@st.cache_data(show_spinner=False)
+def cached_load_acordaos(data_dir_str: str):
+    return load_acordaos(Path(data_dir_str))
+
+
+@st.cache_resource(show_spinner=False)
+def cached_build_index(records_json: str):
+    records = json.loads(records_json)
+    return build_search_index(records)
+
 
 st.title("⚖️ Validador de Acórdãos e Jurisprudência")
 st.caption(
@@ -35,13 +47,23 @@ with st.sidebar:
         "\n\nO sistema busca automaticamente arquivos `.json` e `.jsonl`."
     )
 
-base_records = load_acordaos(DATA_DIR)
+base_records = cached_load_acordaos(str(DATA_DIR))
 base_summary = summarize_base(DATA_DIR, base_records)
 
 col1, col2, col3 = st.columns(3)
 col1.metric("Registros carregados", base_summary["total_registros"])
 col2.metric("Arquivos da base", base_summary["total_arquivos"])
 col3.metric("Anos encontrados", ", ".join(base_summary["anos"]) if base_summary["anos"] else "Nenhum")
+
+if base_records:
+    try:
+        vectorizer, base_matrix = cached_build_index(json.dumps(base_records, ensure_ascii=False, sort_keys=True))
+    except Exception as exc:
+        st.error("A base foi encontrada, mas houve falha ao montar o índice de busca.")
+        st.exception(exc)
+        st.stop()
+else:
+    vectorizer, base_matrix = None, None
 
 with st.expander("Schema esperado da base JSON"):
     st.code(
@@ -102,6 +124,7 @@ if analyze:
             piece_text = manual_text
             file_name = "texto_colado.txt"
     except Exception as exc:
+        st.error("Falha ao ler o arquivo enviado.")
         st.exception(exc)
         st.stop()
 
@@ -118,6 +141,8 @@ if analyze:
             blocks=blocks,
             citations=citations,
             base_records=base_records,
+            vectorizer=vectorizer,
+            base_matrix=base_matrix,
             top_k=top_k,
             min_score=min_score,
         )
@@ -131,9 +156,7 @@ if analyze:
     c3.metric("Citações divergentes", stats["citacoes_divergentes"])
     c4.metric("Blocos com sugestão", stats["blocos_com_sugestao"])
 
-    tab1, tab2, tab3, tab4 = st.tabs(
-        ["Resumo executivo", "Citações", "Sugestões por bloco", "Exportação"]
-    )
+    tab1, tab2, tab3, tab4 = st.tabs(["Resumo executivo", "Citações", "Sugestões por bloco", "Exportação"])
 
     with tab1:
         st.markdown(analysis["summary_markdown"])
@@ -149,8 +172,7 @@ if analyze:
                     if item.get("matched_record"):
                         rec = item["matched_record"]
                         st.write(
-                            f"Base encontrada: **{rec['numero_acordao']}** • "
-                            f"{rec['colegiado']} • Relator: {rec['relator']}"
+                            f"Base encontrada: **{rec['numero_acordao']}** • {rec['colegiado']} • Relator: {rec['relator']}"
                         )
                         if rec.get("assunto"):
                             st.caption(rec["assunto"])
@@ -158,8 +180,7 @@ if analyze:
                         st.write("Sugestões:")
                         for sug in item["suggestions"]:
                             st.markdown(
-                                f"- **{sug['numero_acordao']}** | {sug['colegiado']} | "
-                                f"score `{sug['score']:.3f}`"
+                                f"- **{sug['numero_acordao']}** | {sug['colegiado']} | score `{sug['score']:.3f}`"
                             )
 
     with tab3:
@@ -173,8 +194,7 @@ if analyze:
                     st.write("Melhores sugestões:")
                     for sug in block["suggestions"]:
                         st.markdown(
-                            f"- **{sug['numero_acordao']}** | {sug['colegiado']} | "
-                            f"Relator: {sug['relator']} | score `{sug['score']:.3f}`"
+                            f"- **{sug['numero_acordao']}** | {sug['colegiado']} | Relator: {sug['relator']} | score `{sug['score']:.3f}`"
                         )
                         if sug.get("sumario"):
                             st.caption(sug["sumario"])
@@ -182,8 +202,12 @@ if analyze:
 
     with tab4:
         export_rows = build_export_rows(analysis)
-        df = pd.DataFrame(export_rows)
-        st.dataframe(df, use_container_width=True)
+        if export_rows:
+            df = pd.DataFrame(export_rows)
+            st.dataframe(df, use_container_width=True)
+        else:
+            df = pd.DataFrame()
+            st.info("Não houve linhas para exportação nesta análise.")
 
         report_md = build_markdown_report(file_name=file_name, analysis=analysis)
         st.download_button(
@@ -203,6 +227,5 @@ if analyze:
 
 with st.expander("Aviso importante"):
     st.warning(
-        "Este sistema é ferramenta de apoio. Sempre valide a citação, o contexto e a pertinência "
-        "antes do protocolo da peça."
+        "Este sistema é ferramenta de apoio. Sempre valide a citação, o contexto e a pertinência antes do protocolo da peça."
     )

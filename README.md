@@ -7,6 +7,15 @@ Sistema em **Streamlit** para:
 - sugerir acórdãos aderentes com base semântica;
 - gerar relatório exportável em Markdown e CSV.
 
+## Ajustes desta revisão
+
+- correção da estrutura de pastas vazias (`data/acordaos`, `assets`, `exports`);
+- cache de carregamento da base e do índice TF-IDF;
+- redução do consumo de memória na análise;
+- tratamento mais robusto de JSON com BOM (`utf-8-sig`);
+- deduplicação de registros da base;
+- normalização de status (`ativo`, `sigiloso`, `desconhecido`).
+
 ## Estrutura
 
 ```bash
@@ -19,8 +28,11 @@ jurisprudencia_match_system/
 │   └── acordaos/
 │       └── .gitkeep
 ├── exports/
+│   └── .gitkeep
 ├── assets/
+│   └── .gitkeep
 └── modules/
+    ├── __init__.py
     ├── base_loader.py
     ├── piece_reader.py
     ├── citation_extractor.py
@@ -31,34 +43,8 @@ jurisprudencia_match_system/
 ## Como usar
 
 1. Coloque seus JSONs anuais em `data/acordaos/`
-2. Instale as dependências:
-   `pip install -r requirements.txt`
-3. Rode:
-   `streamlit run app.py`
-
-## Schema esperado
-
-```json
-{
-  "id": "ACORDAO-COMPLETO-2230911",
-  "tipo": "ACÓRDÃO",
-  "titulo": "ACÓRDÃO 3215/2016 ATA 40/2016 - PLENÁRIO",
-  "numero_acordao": "3215/2016",
-  "numero_acordao_num": "3215",
-  "ano_acordao": "2016",
-  "colegiado": "PLENÁRIO",
-  "data_sessao": "07/12/2016",
-  "relator": "MINISTRO XXXXX",
-  "processo": "XXXXX/2016-0",
-  "assunto": "Representação sobre irregularidades em licitação",
-  "sumario": "Trecho resumido da tese jurídica",
-  "ementa_match": "licitação, diligência, inexequibilidade, saneamento",
-  "decisao": "texto resumido da decisão",
-  "url_oficial": "",
-  "status": "ativo",
-  "tags": ["licitação", "inexequibilidade", "diligência", "saneamento"]
-}
-```
+2. Instale as dependências: `pip install -r requirements.txt`
+3. Rode: `streamlit run app.py`
 
 ## Observações
 
