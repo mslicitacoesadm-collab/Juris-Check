@@ -4,17 +4,20 @@ import re
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
 
-from .base_db import detect_schema, exact_lookup, open_db, row_to_normalized_dict
+from .base_db import exact_lookup, detect_schema, open_db, row_to_normalized_dict
 from .citation_extractor import THESIS_KEYWORDS, detect_thesis, short_quote_from_text
 
 STOPWORDS = {'a','o','e','de','do','da','dos','das','em','no','na','nos','nas','por','para','com','sem','ao','aos','as','os','um','uma','uns','umas','que','se','ou','como','mais','menos','ser','foi','sua','seu','suas','seus','art','lei','nº','n°','item','subitem','recurso','contrarrazões','peça','julgamento','tribunal','união','uniao','tcu','plenario','plenário','câmara','camara'}
 TOKEN_RE = re.compile(r'[a-zà-ÿ0-9]{3,}', re.I)
-
+REFERENCE_PATTERNS = [
+    ('sumula', re.compile(r'(?i)s[úu]mula\s*(?:tcu\s*)?(?:n[ºo°]\s*)?(?P<num>\d{1,4})')),
+    ('acordao', re.compile(r'(?i)(?:tcu\s*,?\s*)?ac[óo]rd[aã]o\s*(?:n[ºo°]\s*)?(?P<num>\d{1,5})\s*[/\\-]\s*(?P<ano>20\d{2})')),
+    ('jurisprudencia', re.compile(r'(?i)(?:jurisprud[eê]ncia(?:\s+selecionada)?\s*(?:n[ºo°]\s*)?)(?P<num>\d{1,5})\s*[/\\-]\s*(?P<ano>20\d{2})')),
+]
 
 
 def tokenize(text: str) -> List[str]:
     return [t.lower() for t in TOKEN_RE.findall(text or '') if t.lower() not in STOPWORDS]
-
 
 
 def make_match_query(text: str, thesis_key: str | None = None, max_terms: int = 18) -> Tuple[List[str], List[str]]:
@@ -37,7 +40,6 @@ def make_match_query(text: str, thesis_key: str | None = None, max_terms: int = 
     return weighted[:max_terms], weighted[:max_terms]
 
 
-
 def _table_text_expr(schema: Dict) -> str:
     cols = schema.get('columns', set())
     parts = []
@@ -47,18 +49,35 @@ def _table_text_expr(schema: Dict) -> str:
     return " || ' ' || ".join(parts) if parts else "''"
 
 
-
 def _normalize_colegiado(value: str) -> str:
     v = (value or '').lower().strip()
     return v.replace('1ª câmara', 'primeira câmara').replace('2ª câmara', 'segunda câmara').replace('1a camara', 'primeira camara').replace('2a camara', 'segunda camara')
 
 
+def _direct_reference_lookup(db_files: Iterable[Path], query_text: str) -> List[Dict]:
+    out: List[Dict] = []
+    seen = set()
+    for kind, pattern in REFERENCE_PATTERNS:
+        m = pattern.search(query_text or '')
+        if not m:
+            continue
+        numero = m.groupdict().get('num') or ''
+        ano = m.groupdict().get('ano') or None
+        rec = exact_lookup(db_files, numero, ano, tipo=kind)
+        if rec:
+            ident = (rec.get('tipo'), rec.get('numero_identificador'))
+            if ident not in seen:
+                seen.add(ident)
+                out.append(rec)
+    return out
+
 
 def fetch_candidates(db_files: Iterable[Path], query_text: str, thesis_key: str | None = None, limit_each: int = 20, tipo: str | None = None) -> List[Dict]:
     weighted_terms, _ = make_match_query(query_text, thesis_key)
-    if not weighted_terms:
-        return []
     out: List[Dict] = []
+    out.extend(_direct_reference_lookup(db_files, query_text))
+    if not weighted_terms:
+        return out
     for db in db_files:
         schema = detect_schema(str(db))
         table = schema.get('table')
@@ -69,7 +88,6 @@ def fetch_candidates(db_files: Iterable[Path], query_text: str, thesis_key: str 
         try:
             conn = open_db(db)
             try:
-                rows = []
                 text_expr = _table_text_expr(schema)
                 ors = ' OR '.join([f"LOWER({text_expr}) LIKE ?" for _ in weighted_terms[:8]])
                 params = [f"%{t.lower()}%" for t in weighted_terms[:8]]
@@ -86,10 +104,8 @@ def fetch_candidates(db_files: Iterable[Path], query_text: str, thesis_key: str 
     return out
 
 
-
 def _record_text(record: Dict) -> str:
     return ' '.join([record.get('assunto', ''), record.get('sumario', ''), record.get('ementa_match', ''), record.get('decisao', ''), record.get('tags', ''), record.get('tema', ''), record.get('subtema', '')])
-
 
 
 def risk_from_score(score: float) -> tuple[str, str]:
@@ -100,14 +116,12 @@ def risk_from_score(score: float) -> tuple[str, str]:
     return 'alto', '#991b1b'
 
 
-
 def build_short_suggestion(record: Dict) -> str:
     if record.get('tipo') == 'sumula':
         return f"Súmula TCU {record.get('numero_sumula')} · {short_quote_from_text(record.get('sumario') or record.get('ementa_match') or '')}"
     if record.get('tipo') == 'jurisprudencia':
         return f"Jurisprudência {record.get('numero_acordao')}/{record.get('ano_acordao')} · {short_quote_from_text(record.get('sumario') or record.get('ementa_match') or '')}"
     return f"TCU, Acórdão nº {record.get('numero_acordao_num') or record.get('numero_acordao')}/{record.get('ano_acordao')} - {record.get('colegiado')} · {short_quote_from_text(record.get('sumario') or record.get('ementa_match') or '')}"
-
 
 
 def score_record_compat(record: Dict, query_text: str, thesis_key: str | None = None, colegiado_hint: str | None = None) -> float:
@@ -124,7 +138,6 @@ def score_record_compat(record: Dict, query_text: str, thesis_key: str | None = 
     if record.get('tipo') == 'sumula':
         base += 0.04
     return min(base, 0.99)
-
 
 
 def search_candidates(db_files: Iterable[Path], query_text: str, thesis_key: str | None = None, top_k: int = 5, colegiado_hint: str | None = None, tipo: str | None = None) -> List[Dict]:
@@ -145,7 +158,6 @@ def search_candidates(db_files: Iterable[Path], query_text: str, thesis_key: str
     return scored[:top_k]
 
 
-
 def build_thesis_paragraph(record: Dict, tese_label: str) -> str:
     if record.get('tipo') == 'sumula':
         base = f"Como reforço da tese de {tese_label.lower()}, recomenda-se a invocação da Súmula TCU {record.get('numero_sumula')}, cujo enunciado converge com o argumento desenvolvido na peça."
@@ -157,6 +169,20 @@ def build_thesis_paragraph(record: Dict, tese_label: str) -> str:
     return f"{base} Em síntese, o precedente registra que {excerto.lower()}"
 
 
+
+
+def build_contextual_rewrite(citation: Dict, record: Dict, tese_label: str) -> str:
+    contexto = (citation.get('contexto') or '').strip()
+    if record.get('tipo') == 'sumula':
+        ref = f"Súmula TCU {record.get('numero_sumula')}"
+    elif record.get('tipo') == 'jurisprudencia':
+        ref = f"Jurisprudência {record.get('numero_acordao')}/{record.get('ano_acordao')}"
+    else:
+        ref = f"TCU, Acórdão nº {record.get('numero_acordao_num') or record.get('numero_acordao')}/{record.get('ano_acordao')} - {record.get('colegiado')}"
+    excerto = short_quote_from_text(record.get('sumario') or record.get('ementa_match') or record.get('decisao') or '', max_chars=220)
+    if contexto and len(contexto) < 340:
+        return f"No contexto da {tese_label.lower()}, a referência adequada é {ref}, precedente que indica, em síntese, que {excerto.lower()}"
+    return f"Como reforço da {tese_label.lower()}, cabe citar {ref}, pois o precedente registra, em síntese, que {excerto.lower()}"
 
 def validate_citation(db_files: Iterable[Path], citation: Dict, top_k: int = 3) -> Dict:
     context = citation.get('contexto', '')
@@ -172,11 +198,14 @@ def validate_citation(db_files: Iterable[Path], citation: Dict, top_k: int = 3) 
     result['correcao_sugerida'] = None
     result['score_contexto'] = 0.0
     result['risco'] = 'alto'
+    result['redacao_sugerida'] = ''
 
     citation_type = citation.get('tipo_citacao', 'acordao')
     exact = None
     if citation_type == 'sumula' and citation.get('numero_sumula'):
         exact = exact_lookup(db_files, citation.get('numero_sumula'), tipo='sumula')
+    elif citation_type == 'jurisprudencia' and citation.get('numero_acordao_num'):
+        exact = exact_lookup(db_files, citation.get('numero_acordao_num'), citation.get('ano_acordao'), tipo='jurisprudencia')
     elif citation.get('numero_acordao_num'):
         exact = exact_lookup(db_files, citation.get('numero_acordao_num'), citation.get('ano_acordao'), tipo='acordao')
 
@@ -194,12 +223,12 @@ def validate_citation(db_files: Iterable[Path], citation: Dict, top_k: int = 3) 
         else:
             result['status'] = 'valida_pouco_compativel'
             result['status_label'] = 'Número válido, mas contexto fraco'
-            alts = search_candidates(db_files, context or citation.get('raw', ''), thesis_key=thesis_key, top_k=top_k, colegiado_hint=colegiado_hint)
+            alts = search_candidates(db_files, context or citation.get('raw', ''), thesis_key=thesis_key, top_k=top_k, colegiado_hint=colegiado_hint, tipo=None if citation_type == 'acordao' else citation_type)
             result['alternativas'] = [a for a in alts if (a.get('tipo'), a.get('numero_identificador')) != (exact.get('tipo'), exact.get('numero_identificador'))][:top_k]
             if result['alternativas']:
                 result['correcao_sugerida'] = result['alternativas'][0]
     else:
-        alts = search_candidates(db_files, context or citation.get('raw', ''), thesis_key=thesis_key, top_k=top_k, colegiado_hint=colegiado_hint)
+        alts = search_candidates(db_files, context or citation.get('raw', ''), thesis_key=thesis_key, top_k=top_k, colegiado_hint=colegiado_hint, tipo=None if citation_type == 'acordao' else citation_type)
         result['alternativas'] = alts
         if alts:
             result['status'] = 'divergente'
@@ -210,6 +239,7 @@ def validate_citation(db_files: Iterable[Path], citation: Dict, top_k: int = 3) 
 
     if result['correcao_sugerida']:
         cor = result['correcao_sugerida']
+        result['redacao_sugerida'] = build_contextual_rewrite(citation, cor, result.get('tese') or 'tese jurídica')
         if cor.get('tipo') == 'sumula':
             result['substituicao_textual'] = f"Súmula TCU {cor.get('numero_sumula')}"
         elif cor.get('tipo') == 'jurisprudencia':

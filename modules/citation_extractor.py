@@ -9,6 +9,7 @@ CITATION_PATTERNS = [
     ('acordao', re.compile(r'(?i)(?:tcu\s*,?\s*)?ac[óo]rd[aã]o\s*(?:n[ºo°]\s*)?(?P<num>\d{1,5})\s*[/\\-]\s*(?P<ano>20\d{2})(?:\s*[–-]\s*(?P<colegiado>plen[aá]rio|1[ªa]\s*c[aâ]mara|2[ªa]\s*c[aâ]mara|primeira\s*c[aâ]mara|segunda\s*c[aâ]mara))?', re.I)),
     ('acordao', re.compile(r'(?i)(?:tcu\s*,?\s*)?ac[óo]rd[aã]o\s*(?:n[ºo°]\s*)?(?P<num>\d{1,5})(?:\s*[–-]\s*(?P<colegiado>plen[aá]rio|1[ªa]\s*c[aâ]mara|2[ªa]\s*c[aâ]mara|primeira\s*c[aâ]mara|segunda\s*c[aâ]mara))', re.I)),
     ('sumula', re.compile(r'(?i)s[úu]mula\s*(?:tcu\s*)?(?:n[ºo°]\s*)?(?P<num>\d{1,4})', re.I)),
+    ('jurisprudencia', re.compile(r'(?i)(?:jurisprud[eê]ncia(?:\s+selecionada)?\s*(?:n[ºo°]\s*)?)(?P<num>\d{1,5})\s*[/\\-]\s*(?P<ano>20\d{2})', re.I)),
 ]
 
 PIECE_SIGNAL_MAP = {
@@ -41,10 +42,8 @@ THESIS_LABEL_MAP = {
 USELESS_BLOCK_PATTERNS = [r'da tempestividade', r'do cabimento', r'dos pedidos', r'nestes termos', r'pede deferimento', r'qualifica[cç][aã]o da parte', r'síntese dos fatos', r'da tempestividade e do cabimento']
 
 
-
 def normalize_space(text: str) -> str:
     return re.sub(r'\s+', ' ', text or '').strip()
-
 
 
 def classify_piece_type(text: str) -> Dict[str, str | int]:
@@ -68,11 +67,15 @@ def classify_piece_type(text: str) -> Dict[str, str | int]:
     return {'tipo': labels[best], 'chave': best, 'confianca': confidence, 'score': best_score, 'fundamentos': ', '.join(hits[best][:5]) or 'classificação por estrutura textual'}
 
 
-
 def extract_citations_with_context(text: str) -> List[Dict[str, str]]:
     citations = []
     seen = set()
     lines = [ln.strip() for ln in (text or '').splitlines()]
+    cursor = 0
+    offsets = []
+    for ln in lines:
+        offsets.append(cursor)
+        cursor += len(ln) + 1
     for idx, line in enumerate(lines):
         if not line:
             continue
@@ -87,9 +90,21 @@ def extract_citations_with_context(text: str) -> List[Dict[str, str]]:
                     continue
                 seen.add(key)
                 context = ' '.join(x for x in lines[max(0, idx-1): min(len(lines), idx+3)] if x)
-                citations.append({'tipo_citacao': citation_type, 'raw': raw, 'numero_acordao_num': numero if citation_type == 'acordao' else '', 'ano_acordao': ano if citation_type == 'acordao' else '', 'numero_sumula': numero if citation_type == 'sumula' else '', 'colegiado_citado': colegiado, 'contexto': normalize_space(context), 'linha': idx + 1})
+                start = offsets[idx] + match.start()
+                end = offsets[idx] + match.end()
+                citations.append({
+                    'tipo_citacao': citation_type,
+                    'raw': raw,
+                    'numero_acordao_num': numero if citation_type in {'acordao', 'jurisprudencia'} else '',
+                    'ano_acordao': ano if citation_type in {'acordao', 'jurisprudencia'} else '',
+                    'numero_sumula': numero if citation_type == 'sumula' else '',
+                    'colegiado_citado': colegiado,
+                    'contexto': normalize_space(context),
+                    'linha': idx + 1,
+                    'start': start,
+                    'end': end,
+                })
     return citations
-
 
 
 def detect_thesis(text: str) -> Dict[str, str | int]:
@@ -107,7 +122,6 @@ def detect_thesis(text: str) -> Dict[str, str | int]:
         hits[thesis] = matched
     best = max(scores, key=scores.get) if scores else 'geral'
     return {'chave': best if scores.get(best, 0) > 0 else 'geral', 'label': THESIS_LABEL_MAP.get(best, 'Tese geral') if scores.get(best, 0) > 0 else THESIS_LABEL_MAP['geral'], 'score': scores.get(best, 0), 'fundamentos': hits.get(best, [])}
-
 
 
 def split_into_argument_blocks(text: str, max_blocks: int = 12) -> List[Dict[str, str]]:
@@ -139,7 +153,7 @@ def split_into_argument_blocks(text: str, max_blocks: int = 12) -> List[Dict[str
         if any(re.search(pat, lower, re.I) for pat in USELESS_BLOCK_PATTERNS):
             continue
         thesis = detect_thesis(block)
-        keyword_bonus = 1 if any(k in lower for k in ['acórdão', 'acordao', 'súmula', 'sumula', 'tcu']) else 0
+        keyword_bonus = 1 if any(k in lower for k in ['acórdão', 'acordao', 'súmula', 'sumula', 'jurisprudência', 'jurisprudencia', 'tcu']) else 0
         density = thesis['score'] + keyword_bonus + min(len(block) // 350, 2)
         if density <= 1:
             continue
@@ -147,7 +161,6 @@ def split_into_argument_blocks(text: str, max_blocks: int = 12) -> List[Dict[str
         scored.append({'texto': block, 'tese': thesis['label'], 'tese_chave': thesis['chave'], 'preview': preview, 'fundamentos': ', '.join(thesis['fundamentos'][:4]), 'score_tese': density})
     scored.sort(key=lambda x: x['score_tese'], reverse=True)
     return scored[:max_blocks]
-
 
 
 def extract_piece_structure(text: str) -> Dict[str, object]:
@@ -166,7 +179,6 @@ def extract_piece_structure(text: str) -> Dict[str, object]:
         'tese_principal': principal.get('tese', 'Tese geral'),
         'resumo_inicial': principal.get('preview', ''),
     }
-
 
 
 def short_quote_from_text(text: str, max_chars: int = 240) -> str:
