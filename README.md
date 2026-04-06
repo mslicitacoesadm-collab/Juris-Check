@@ -1,23 +1,18 @@
-# Atlas de Precedentes MS — V8 Premium
+# Atlas de Acórdãos MS — Versão final cliente
 
 Principais entregas desta versão:
-- auditoria de citações de acórdãos já usadas na peça
-- reforço por tese com combinação entre acórdão, jurisprudência e súmula
-- nova aba de **busca manual de precedentes**
-- pesquisa por **tese** ou por **referência direta**
-- exibição do motivo da sugestão e parágrafo pronto para uso
+- classificação mais robusta entre recurso, contrarrazão e impugnação
+- auditoria da citação já existente na peça
+- correção sugerida quando o acórdão citado não é compatível ou não é localizado
+- até 2 teses curtas e aplicadas para reforço argumentativo
 - download da peça corrigida em DOCX e PDF
+- interface mais comercial, limpa e responsiva
 
 ## Estrutura esperada
 
 Coloque seus bancos SQLite em:
 
 `data/base/`
-
-A pasta aceita bases de:
-- acórdãos
-- jurisprudência
-- súmulas
 
 ## Executar localmente
 
