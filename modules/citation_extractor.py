@@ -6,18 +6,8 @@ from typing import Dict, List
 ROMAN_HEADING = re.compile(r'^(?:[IVXLC]+\.|\d+(?:\.\d+)*)\s+', re.I)
 
 CITATION_PATTERNS = [
-    (
-        'acordao',
-        re.compile(r'(?i)(?:tcu\s*,?\s*)?ac[óo]rd[aã]o\s*(?:n[ºo°]\s*)?(?P<num>\d{1,5})\s*[/\\-]\s*(?P<ano>20\d{2})(?:\s*[–-]\s*(?P<colegiado>plen[aá]rio|1[ªa]\s*c[aâ]mara|2[ªa]\s*c[aâ]mara|primeira\s*c[aâ]mara|segunda\s*c[aâ]mara))?', re.I),
-    ),
-    (
-        'acordao',
-        re.compile(r'(?i)(?:tcu\s*,?\s*)?ac[óo]rd[aã]o\s*(?:n[ºo°]\s*)?(?P<num>\d{1,5})(?:\s*[–-]\s*(?P<colegiado>plen[aá]rio|1[ªa]\s*c[aâ]mara|2[ªa]\s*c[aâ]mara|primeira\s*c[aâ]mara|segunda\s*c[aâ]mara))', re.I),
-    ),
-    (
-        'sumula',
-        re.compile(r'(?i)(?:s[úu]mula\s*(?:tcu)?\s*(?:n[ºo°]\s*)?)(?P<num>\d{1,4})\b', re.I),
-    ),
+    re.compile(r'(?i)(?:tcu\s*,?\s*)?ac[óo]rd[aã]o\s*(?:n[ºo°]\s*)?(?P<num>\d{1,5})\s*[/\\-]\s*(?P<ano>20\d{2})(?:\s*[–-]\s*(?P<colegiado>plen[aá]rio|1[ªa]\s*c[aâ]mara|2[ªa]\s*c[aâ]mara|primeira\s*c[aâ]mara|segunda\s*c[aâ]mara))?', re.I),
+    re.compile(r'(?i)(?:tcu\s*,?\s*)?ac[óo]rd[aã]o\s*(?:n[ºo°]\s*)?(?P<num>\d{1,5})(?:\s*[–-]\s*(?P<colegiado>plen[aá]rio|1[ªa]\s*c[aâ]mara|2[ªa]\s*c[aâ]mara|primeira\s*c[aâ]mara|segunda\s*c[aâ]mara))', re.I),
 ]
 
 PIECE_SIGNAL_MAP = {
@@ -148,22 +138,20 @@ def extract_citations_with_context(text: str) -> List[Dict[str, str]]:
     for idx, line in enumerate(lines):
         if not line:
             continue
-        for precedent_type, pattern in CITATION_PATTERNS:
+        for pattern in CITATION_PATTERNS:
             for match in pattern.finditer(line):
                 numero = (match.groupdict().get('num') or '').strip()
                 ano = (match.groupdict().get('ano') or '').strip()
                 colegiado = normalize_space(match.groupdict().get('colegiado') or '')
                 raw = normalize_space(match.group(0))
-                key = (precedent_type, numero, ano, colegiado.lower(), raw.lower())
+                key = (numero, ano, colegiado.lower(), raw.lower())
                 if key in seen:
                     continue
                 seen.add(key)
-                context = ' '.join(x for x in lines[max(0, idx - 1): min(len(lines), idx + 3)] if x)
+                context = ' '.join(x for x in lines[max(0, idx-1): min(len(lines), idx+3)] if x)
                 citations.append({
                     'raw': raw,
-                    'tipo_citacao': precedent_type,
                     'numero_acordao_num': numero,
-                    'numero_sumula': numero if precedent_type == 'sumula' else '',
                     'ano_acordao': ano,
                     'colegiado_citado': colegiado,
                     'contexto': normalize_space(context),
