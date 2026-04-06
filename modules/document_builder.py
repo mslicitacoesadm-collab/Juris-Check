@@ -12,6 +12,16 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
 
 
 
+def _replacement_label(item: Dict[str, Any]) -> str:
+    ptype = item.get('tipo_precedente')
+    if ptype == 'sumula':
+        return f"Súmula TCU {item.get('numero_sumula') or item.get('numero_acordao_num')}"
+    if ptype == 'jurisprudencia':
+        return f"TCU, Jurisprudência nº {item.get('numero_acordao')} - {item.get('colegiado')}"
+    return f"TCU, Acórdão nº {item.get('numero_acordao')} - {item.get('colegiado')}"
+
+
+
 def _replace_citations(text: str, citation_results: List[Dict[str, Any]]) -> str:
     updated = text
     for item in citation_results:
@@ -27,9 +37,9 @@ def _thesis_section(thesis_results: List[Dict[str, Any]]) -> str:
     if not thesis_results:
         return ''
     lines = ['\nVI. DAS TESES DE REFORÇO SUGERIDAS PELO SISTEMA\n']
-    for idx, item in enumerate(thesis_results[:2], start=1):
-        lines.append(f"{6}.{idx}. {item.get('tese','Tese jurídica')}\n")
-        for sug in item.get('sugestoes', [])[:2]:
+    for idx, item in enumerate(thesis_results[:3], start=1):
+        lines.append(f"6.{idx}. {item.get('tese','Tese jurídica')}\n")
+        for sug in item.get('sugestoes', [])[:3]:
             par = sug.get('paragrafo_aplicado') or sug.get('citacao_curta')
             lines.append(par)
             lines.append('')
