@@ -1,38 +1,30 @@
-# Atlas de Acórdãos MS · V7 Premium
+# Atlas de Precedentes MS — V8 Premium
 
-Versão refinada do sistema com suporte a três camadas de precedentes:
+Principais entregas desta versão:
+- auditoria de citações de acórdãos já usadas na peça
+- reforço por tese com combinação entre acórdão, jurisprudência e súmula
+- nova aba de **busca manual de precedentes**
+- pesquisa por **tese** ou por **referência direta**
+- exibição do motivo da sugestão e parágrafo pronto para uso
+- download da peça corrigida em DOCX e PDF
 
-- acórdãos
-- jurisprudência selecionada
-- súmulas
+## Estrutura esperada
 
-## O que mudou
-
-- validação automática de citações de **acórdão** e **súmula**;
-- busca por **jurisprudência** quando ela encaixar melhor na tese;
-- sugestão mista por tese, com possibilidade de recomendar **acórdão + jurisprudência + súmula**;
-- correção textual automática da peça com substituição de citações fracas ou divergentes;
-- métricas separadas da base por tipo de precedente.
-
-## Estrutura esperada da base
-
-Coloque os arquivos `.db` em:
+Coloque seus bancos SQLite em:
 
 `data/base/`
 
-O sistema detecta automaticamente tabelas compatíveis com:
+A pasta aceita bases de:
+- acórdãos
+- jurisprudência
+- súmulas
 
-- `acordaos`
-- `jurisprudencia`
-- `sumula`
-
-## Execução
+## Executar localmente
 
 ```bash
-pip install -r requirements.txt
 streamlit run app.py
 ```
 
-## Observação
+## Deploy
 
-Este pacote foi entregue **sem a base**, como solicitado.
+Suba o conteúdo desta pasta para o GitHub e publique apontando para `app.py`.
