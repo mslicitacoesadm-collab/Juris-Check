@@ -1,12 +1,12 @@
-# Atlas de Acórdãos MS — Versão final cliente
+# Atlas de Precedentes MS — V11
 
-Principais entregas desta versão:
-- classificação mais robusta entre recurso, contrarrazão e impugnação
-- auditoria da citação já existente na peça
-- correção sugerida quando o acórdão citado não é compatível ou não é localizado
-- até 2 teses curtas e aplicadas para reforço argumentativo
-- download da peça corrigida em DOCX e PDF
-- interface mais comercial, limpa e responsiva
+Evoluções aplicadas nesta versão:
+- foco mantido no núcleo da ferramenta: validar e corrigir citações de acórdão, jurisprudência e súmula
+- correção automática textual quando a referência da peça estiver divergente da base
+- geração de duas saídas: texto limpo e texto com marcação de correção
+- DOCX com destaque visual das substituições aplicadas
+- suporte a busca e validação de jurisprudência selecionada
+- interface enxuta, com menos informação acessória e mais auditoria prática
 
 ## Estrutura esperada
 
@@ -19,7 +19,3 @@ Coloque seus bancos SQLite em:
 ```bash
 streamlit run app.py
 ```
-
-## Deploy
-
-Suba o conteúdo desta pasta para o GitHub e publique apontando para `app.py`.
