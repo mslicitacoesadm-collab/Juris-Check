@@ -1,21 +1,21 @@
-# Atlas de Precedentes MS — V11
+# Atlas dos Acórdãos V13 Profissional
 
-Evoluções aplicadas nesta versão:
-- foco mantido no núcleo da ferramenta: validar e corrigir citações de acórdão, jurisprudência e súmula
-- correção automática textual quando a referência da peça estiver divergente da base
-- geração de duas saídas: texto limpo e texto com marcação de correção
-- DOCX com destaque visual das substituições aplicadas
-- suporte a busca e validação de jurisprudência selecionada
-- interface enxuta, com menos informação acessória e mais auditoria prática
+Sistema em Streamlit para auditoria de citações jurídicas em peças licitatórias.
 
-## Estrutura esperada
+## Como usar
+1. Instale as dependências:
+   ```bash
+   pip install -r requirements.txt
+   ```
+2. Coloque seus arquivos `.db` em `data/base/`.
+3. Execute:
+   ```bash
+   streamlit run app.py
+   ```
 
-Coloque seus bancos SQLite em:
-
-`data/base/`
-
-## Executar localmente
-
-```bash
-streamlit run app.py
-```
+## O foco da ferramenta
+- validar citação de acórdão, súmula e jurisprudência digitada na peça
+- localizar divergências entre o texto e a base
+- sugerir precedentes melhores para a tese
+- reescrever o trecho com linguagem mais natural
+- exportar peça revisada e relatório de auditoria

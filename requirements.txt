@@ -1,6 +1,5 @@
-streamlit
-pandas
-python-docx
-pdfplumber
-reportlab
-Pillow
+streamlit>=1.33
+pandas>=2.0
+python-docx>=1.1.0
+pdfplumber>=0.10.0
+reportlab>=4.0.0
