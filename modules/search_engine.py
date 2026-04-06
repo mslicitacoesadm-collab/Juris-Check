@@ -2,97 +2,66 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, Iterable, List
 
-from .base_db import exact_lookup, detect_schema, open_db, row_to_normalized_dict
+from .base_db import detect_schema, exact_lookup, open_db, row_to_normalized_dict
 from .citation_extractor import THESIS_KEYWORDS, detect_thesis, short_quote_from_text
 
-STOPWORDS = {'a','o','e','de','do','da','dos','das','em','no','na','nos','nas','por','para','com','sem','ao','aos','as','os','um','uma','uns','umas','que','se','ou','como','mais','menos','ser','foi','sua','seu','suas','seus','art','lei','nº','n°','item','subitem','recurso','contrarrazões','peça','julgamento','tribunal','união','uniao','tcu','plenario','plenário','câmara','camara'}
+STOPWORDS = {'a','o','e','de','do','da','dos','das','em','no','na','nos','nas','por','para','com','sem','ao','aos','as','os','um','uma','que','se','ou','como','mais','menos','ser','foi','sua','seu','suas','seus','art','lei','item','subitem','recurso','peça','julgamento','tribunal','união','uniao','tcu'}
 TOKEN_RE = re.compile(r'[a-zà-ÿ0-9]{3,}', re.I)
-REFERENCE_PATTERNS = [
-    ('sumula', re.compile(r'(?i)s[úu]mula\s*(?:tcu\s*)?(?:n[ºo°]\s*)?(?P<num>\d{1,4})')),
-    ('acordao', re.compile(r'(?i)(?:tcu\s*,?\s*)?ac[óo]rd[aã]o\s*(?:n[ºo°]\s*)?(?P<num>\d{1,5})\s*[/\\-]\s*(?P<ano>20\d{2})')),
-    ('jurisprudencia', re.compile(r'(?i)(?:jurisprud[eê]ncia(?:\s+selecionada)?\s*(?:n[ºo°]\s*)?)(?P<num>\d{1,5})\s*[/\\-]\s*(?P<ano>20\d{2})')),
-]
 
 
 def tokenize(text: str) -> List[str]:
     return [t.lower() for t in TOKEN_RE.findall(text or '') if t.lower() not in STOPWORDS]
 
 
-def make_match_query(text: str, thesis_key: str | None = None, max_terms: int = 18) -> Tuple[List[str], List[str]]:
-    tokens = tokenize(text)
-    weighted = []
+def expand_query(text: str, thesis_key: str | None = None, max_terms: int = 18) -> List[str]:
+    terms: List[str] = []
     seen = set()
     if thesis_key and thesis_key in THESIS_KEYWORDS:
         for term in THESIS_KEYWORDS[thesis_key]:
-            term = re.sub(r'[^a-zà-ÿ0-9 ]', ' ', term.lower()).strip()
-            for sub in term.split():
-                if len(sub) >= 4 and sub not in seen:
-                    weighted.append(sub)
-                    seen.add(sub)
-    for tok in tokens:
+            for tok in tokenize(term):
+                if tok not in seen:
+                    seen.add(tok); terms.append(tok)
+    for tok in tokenize(text):
         if tok not in seen:
-            weighted.append(tok)
-            seen.add(tok)
-        if len(weighted) >= max_terms:
+            seen.add(tok); terms.append(tok)
+        if len(terms) >= max_terms:
             break
-    return weighted[:max_terms], weighted[:max_terms]
+    return terms[:max_terms]
 
 
-def _table_text_expr(schema: Dict) -> str:
-    cols = schema.get('columns', set())
-    parts = []
-    for col in ['assunto', 'sumario', 'ementa_match', 'decisao', 'tags', 'texto_match', 'acordao_texto', 'tema', 'subtema', 'enunciado', 'excerto', 'indexacao', 'indexadoresconsolidados']:
-        if col in cols:
-            parts.append(f"COALESCE({col}, '')")
+def _text_fields_expr(kind: str, cols: set[str]) -> str:
+    candidates = {
+        'acordao': ['assunto', 'sumario', 'ementa_match', 'texto_match', 'decisao', 'acordao_texto', 'tags'],
+        'jurisprudencia': ['tema', 'subtema', 'enunciado', 'excerto', 'indexacao', 'indexadoresconsolidados', 'referencialegal'],
+        'sumula': ['tema', 'subtema', 'enunciado', 'excerto', 'indexacao', 'indexadoresconsolidados', 'referencialegal'],
+    }
+    parts = [f"COALESCE({c}, '')" for c in candidates.get(kind, []) if c in cols]
     return " || ' ' || ".join(parts) if parts else "''"
 
 
-def _normalize_colegiado(value: str) -> str:
-    v = (value or '').lower().strip()
-    return v.replace('1ª câmara', 'primeira câmara').replace('2ª câmara', 'segunda câmara').replace('1a camara', 'primeira camara').replace('2a camara', 'segunda camara')
-
-
-def _direct_reference_lookup(db_files: Iterable[Path], query_text: str) -> List[Dict]:
+def fetch_candidates(db_files: Iterable[Path], query_text: str, thesis_key: str | None = None, kinds: set[str] | None = None, limit_each: int = 24) -> List[Dict]:
+    terms = expand_query(query_text, thesis_key)
+    if not terms:
+        return []
     out: List[Dict] = []
-    seen = set()
-    for kind, pattern in REFERENCE_PATTERNS:
-        m = pattern.search(query_text or '')
-        if not m:
-            continue
-        numero = m.groupdict().get('num') or ''
-        ano = m.groupdict().get('ano') or None
-        rec = exact_lookup(db_files, numero, ano, tipo=kind)
-        if rec:
-            ident = (rec.get('tipo'), rec.get('numero_identificador'))
-            if ident not in seen:
-                seen.add(ident)
-                out.append(rec)
-    return out
-
-
-def fetch_candidates(db_files: Iterable[Path], query_text: str, thesis_key: str | None = None, limit_each: int = 20, tipo: str | None = None) -> List[Dict]:
-    weighted_terms, _ = make_match_query(query_text, thesis_key)
-    out: List[Dict] = []
-    out.extend(_direct_reference_lookup(db_files, query_text))
-    if not weighted_terms:
-        return out
     for db in db_files:
         schema = detect_schema(str(db))
+        kind = schema.get('kind')
+        if kinds and kind not in kinds:
+            continue
         table = schema.get('table')
+        cols = schema.get('columns', set())
         if not table:
             continue
-        if tipo and schema.get('record_type') != tipo:
-            continue
+        expr = _text_fields_expr(kind, cols)
+        ors = ' OR '.join([f'LOWER({expr}) LIKE ?' for _ in terms[:8]])
+        params = [f'%{t.lower()}%' for t in terms[:8]]
         try:
             conn = open_db(db)
             try:
-                text_expr = _table_text_expr(schema)
-                ors = ' OR '.join([f"LOWER({text_expr}) LIKE ?" for _ in weighted_terms[:8]])
-                params = [f"%{t.lower()}%" for t in weighted_terms[:8]]
-                sql = f"SELECT * FROM {table} WHERE {ors} LIMIT ?"
-                rows = conn.execute(sql, params + [limit_each]).fetchall()
+                rows = conn.execute(f'SELECT * FROM {table} WHERE {ors} LIMIT ?', params + [limit_each]).fetchall()
                 for row in rows:
                     item = row_to_normalized_dict(row, schema)
                     item['_source_db'] = db.name
@@ -105,145 +74,96 @@ def fetch_candidates(db_files: Iterable[Path], query_text: str, thesis_key: str 
 
 
 def _record_text(record: Dict) -> str:
-    return ' '.join([record.get('assunto', ''), record.get('sumario', ''), record.get('ementa_match', ''), record.get('decisao', ''), record.get('tags', ''), record.get('tema', ''), record.get('subtema', '')])
+    return ' '.join(filter(None, [record.get('tema',''), record.get('subtema',''), record.get('resumo',''), record.get('excerto',''), record.get('tags','')]))
 
 
-def risk_from_score(score: float) -> tuple[str, str]:
-    if score >= 0.50:
-        return 'baixo', '#166534'
-    if score >= 0.30:
-        return 'médio', '#92400e'
-    return 'alto', '#991b1b'
-
-
-def build_short_suggestion(record: Dict) -> str:
-    if record.get('tipo') == 'sumula':
-        return f"Súmula TCU {record.get('numero_sumula')} · {short_quote_from_text(record.get('sumario') or record.get('ementa_match') or '')}"
-    if record.get('tipo') == 'jurisprudencia':
-        return f"Jurisprudência {record.get('numero_acordao')}/{record.get('ano_acordao')} · {short_quote_from_text(record.get('sumario') or record.get('ementa_match') or '')}"
-    return f"TCU, Acórdão nº {record.get('numero_acordao_num') or record.get('numero_acordao')}/{record.get('ano_acordao')} - {record.get('colegiado')} · {short_quote_from_text(record.get('sumario') or record.get('ementa_match') or '')}"
-
-
-def score_record_compat(record: Dict, query_text: str, thesis_key: str | None = None, colegiado_hint: str | None = None) -> float:
-    query_tokens = set(tokenize(query_text))
-    rec_text = _record_text(record).lower()
-    rec_tokens = set(tokenize(rec_text))
-    inter = len(query_tokens & rec_tokens)
-    base = inter / max(len(query_tokens), 1)
+def score_record(record: Dict, query_text: str, thesis_key: str | None = None) -> float:
+    q_tokens = set(expand_query(query_text, thesis_key))
+    r_tokens = set(tokenize(_record_text(record)))
+    if not q_tokens or not r_tokens:
+        return 0.0
+    overlap = q_tokens & r_tokens
+    coverage = len(overlap) / max(1, len(q_tokens))
+    density = len(overlap) / max(1, len(r_tokens))
+    score = coverage * 0.72 + density * 0.18
     if thesis_key and thesis_key in THESIS_KEYWORDS:
-        thesis_hits = sum(1 for term in THESIS_KEYWORDS[thesis_key] if re.search(term, rec_text, re.I))
-        base += min(thesis_hits * 0.08, 0.32)
-    if colegiado_hint and _normalize_colegiado(colegiado_hint) and _normalize_colegiado(colegiado_hint) == _normalize_colegiado(record.get('colegiado', '')):
-        base += 0.05
-    if record.get('tipo') == 'sumula':
-        base += 0.04
-    return min(base, 0.99)
+        expanded = {tok for term in THESIS_KEYWORDS[thesis_key] for tok in tokenize(term)}
+        if overlap & expanded:
+            score += 0.10
+    if record.get('tipo') == 'Súmula':
+        score += 0.03
+    return round(score, 4)
 
 
-def search_candidates(db_files: Iterable[Path], query_text: str, thesis_key: str | None = None, top_k: int = 5, colegiado_hint: str | None = None, tipo: str | None = None) -> List[Dict]:
-    candidates = fetch_candidates(db_files, query_text, thesis_key=thesis_key, limit_each=max(10, top_k * 5), tipo=tipo)
-    scored = []
-    seen = set()
-    for item in candidates:
-        ident = (item.get('tipo'), item.get('numero_sumula') or item.get('numero_acordao_num') or item.get('numero_acordao'), item.get('ano_acordao'))
-        if ident in seen:
+def build_short_reference(record: Dict) -> str:
+    if record.get('tipo') == 'Súmula':
+        return f"Súmula TCU nº {record.get('numero')}"
+    return f"TCU, {record.get('tipo')} nº {record.get('numero')}/{record.get('ano')} - {record.get('colegiado')}"
+
+
+def suggest_rewrite(context: str, record: Dict, thesis_label: str) -> str:
+    short = short_quote_from_text(record.get('excerto') or record.get('resumo') or '', 240)
+    ref = build_short_reference(record)
+    base = f"No ponto relativo a {thesis_label.lower()}, mostra-se mais adequado invocar {ref}, pois o precedente registra que {short.lower()}"
+    if not base.endswith('.'):
+        base += '.'
+    return base
+
+
+def search_candidates(db_files: Iterable[Path], query_text: str, thesis_key: str | None = None, kinds: set[str] | None = None, top_k: int = 5) -> List[Dict]:
+    raw = fetch_candidates(db_files, query_text, thesis_key, kinds=kinds, limit_each=max(24, top_k * 10))
+    seen = set(); scored = []
+    for rec in raw:
+        uniq = (rec.get('tipo'), rec.get('numero'), rec.get('ano'))
+        if uniq in seen:
             continue
-        seen.add(ident)
-        score = score_record_compat(item, query_text, thesis_key, colegiado_hint)
-        item['compat_score'] = round(score, 4)
-        item['citacao_curta'] = build_short_suggestion(item)
-        item['risco'], item['risco_color'] = risk_from_score(score)
-        scored.append(item)
-    scored.sort(key=lambda x: x.get('compat_score', 0.0), reverse=True)
+        seen.add(uniq)
+        score = score_record(rec, query_text, thesis_key)
+        if score < 0.14:
+            continue
+        rec['compat_score'] = score
+        rec['citacao_curta'] = build_short_reference(rec)
+        rec['fundamento_curto'] = short_quote_from_text(rec.get('resumo') or rec.get('excerto') or '', 220)
+        scored.append(rec)
+    scored.sort(key=lambda x: x['compat_score'], reverse=True)
     return scored[:top_k]
 
 
-def build_thesis_paragraph(record: Dict, tese_label: str) -> str:
-    if record.get('tipo') == 'sumula':
-        base = f"Como reforço da tese de {tese_label.lower()}, recomenda-se a invocação da Súmula TCU {record.get('numero_sumula')}, cujo enunciado converge com o argumento desenvolvido na peça."
-    elif record.get('tipo') == 'jurisprudencia':
-        base = f"A tese de {tese_label.lower()} pode ser fortalecida com a jurisprudência selecionada {record.get('numero_acordao')}/{record.get('ano_acordao')}, em linha com o entendimento resumido pelo TCU para hipóteses semelhantes."
-    else:
-        base = f"Para reforçar a tese de {tese_label.lower()}, é pertinente mencionar o TCU, Acórdão nº {record.get('numero_acordao_num') or record.get('numero_acordao')}/{record.get('ano_acordao')} - {record.get('colegiado')}, por tratar de situação compatível com a controvérsia analisada."
-    excerto = short_quote_from_text(record.get('sumario') or record.get('ementa_match') or record.get('decisao') or '', max_chars=280)
-    return f"{base} Em síntese, o precedente registra que {excerto.lower()}"
-
-
-
-
-def build_contextual_rewrite(citation: Dict, record: Dict, tese_label: str) -> str:
-    contexto = (citation.get('contexto') or '').strip()
-    if record.get('tipo') == 'sumula':
-        ref = f"Súmula TCU {record.get('numero_sumula')}"
-    elif record.get('tipo') == 'jurisprudencia':
-        ref = f"Jurisprudência {record.get('numero_acordao')}/{record.get('ano_acordao')}"
-    else:
-        ref = f"TCU, Acórdão nº {record.get('numero_acordao_num') or record.get('numero_acordao')}/{record.get('ano_acordao')} - {record.get('colegiado')}"
-    excerto = short_quote_from_text(record.get('sumario') or record.get('ementa_match') or record.get('decisao') or '', max_chars=220)
-    if contexto and len(contexto) < 340:
-        return f"No contexto da {tese_label.lower()}, a referência adequada é {ref}, precedente que indica, em síntese, que {excerto.lower()}"
-    return f"Como reforço da {tese_label.lower()}, cabe citar {ref}, pois o precedente registra, em síntese, que {excerto.lower()}"
-
-def validate_citation(db_files: Iterable[Path], citation: Dict, top_k: int = 3) -> Dict:
-    context = citation.get('contexto', '')
-    thesis = detect_thesis(context)
-    thesis_key = thesis.get('chave') or None
-    colegiado_hint = citation.get('colegiado_citado') or None
-    result = dict(citation)
-    result['tese'] = thesis.get('label')
-    result['status'] = 'nao_localizada'
-    result['status_label'] = 'Não localizada'
-    result['matched_record'] = None
-    result['alternativas'] = []
-    result['correcao_sugerida'] = None
-    result['score_contexto'] = 0.0
-    result['risco'] = 'alto'
-    result['redacao_sugerida'] = ''
-
-    citation_type = citation.get('tipo_citacao', 'acordao')
-    exact = None
-    if citation_type == 'sumula' and citation.get('numero_sumula'):
-        exact = exact_lookup(db_files, citation.get('numero_sumula'), tipo='sumula')
-    elif citation_type == 'jurisprudencia' and citation.get('numero_acordao_num'):
-        exact = exact_lookup(db_files, citation.get('numero_acordao_num'), citation.get('ano_acordao'), tipo='jurisprudencia')
-    elif citation.get('numero_acordao_num'):
-        exact = exact_lookup(db_files, citation.get('numero_acordao_num'), citation.get('ano_acordao'), tipo='acordao')
-
+def validate_reference(db_files: Iterable[Path], citation: Dict, top_k: int = 3) -> Dict:
+    thesis = detect_thesis(citation.get('contexto', ''))
+    exact = exact_lookup(db_files, citation.get('kind', ''), citation.get('numero', ''), citation.get('ano') or None)
+    result = {
+        'kind': citation.get('kind'), 'raw': citation.get('raw', ''), 'contexto': citation.get('contexto', ''), 'linha': citation.get('linha'),
+        'tese': thesis.get('label', 'Tese geral'), 'status': 'nao_localizada', 'status_label': 'Não localizada na base',
+        'matched_record': None, 'alternativas': [], 'correcao_sugerida': None, 'substituicao_textual': None,
+        'score_contexto': 0.0, 'grau_confianca': 'Não validada', 'paragrafo_reescrito': '',
+    }
     if exact:
-        score = score_record_compat(exact, context or citation.get('raw', ''), thesis_key, colegiado_hint)
-        exact['compat_score'] = round(score, 4)
-        exact['citacao_curta'] = build_short_suggestion(exact)
-        exact['risco'], exact['risco_color'] = risk_from_score(score)
+        score = score_record(exact, citation.get('contexto', '') or citation.get('raw', ''), thesis.get('chave'))
+        exact['compat_score'] = score
+        exact['citacao_curta'] = build_short_reference(exact)
         result['matched_record'] = exact
-        result['score_contexto'] = round(score, 4)
-        result['risco'] = exact['risco']
-        if score >= 0.32:
+        result['score_contexto'] = score
+        if score >= 0.28:
             result['status'] = 'valida_compatível'
-            result['status_label'] = 'Válida e compatível'
+            result['status_label'] = 'Válida e compatível com a tese'
+            result['grau_confianca'] = 'Alta confiança' if score >= 0.42 else 'Média confiança'
+            result['paragrafo_reescrito'] = citation.get('contexto', '')
         else:
             result['status'] = 'valida_pouco_compativel'
-            result['status_label'] = 'Número válido, mas contexto fraco'
-            alts = search_candidates(db_files, context or citation.get('raw', ''), thesis_key=thesis_key, top_k=top_k, colegiado_hint=colegiado_hint, tipo=None if citation_type == 'acordao' else citation_type)
-            result['alternativas'] = [a for a in alts if (a.get('tipo'), a.get('numero_identificador')) != (exact.get('tipo'), exact.get('numero_identificador'))][:top_k]
-            if result['alternativas']:
-                result['correcao_sugerida'] = result['alternativas'][0]
-    else:
-        alts = search_candidates(db_files, context or citation.get('raw', ''), thesis_key=thesis_key, top_k=top_k, colegiado_hint=colegiado_hint, tipo=None if citation_type == 'acordao' else citation_type)
-        result['alternativas'] = alts
-        if alts:
-            result['status'] = 'divergente'
-            result['status_label'] = 'Citação divergente ou inadequada'
-            result['correcao_sugerida'] = alts[0]
-            result['score_contexto'] = alts[0].get('compat_score', 0.0)
-            result['risco'] = alts[0].get('risco', 'médio')
-
-    if result['correcao_sugerida']:
-        cor = result['correcao_sugerida']
-        result['redacao_sugerida'] = build_contextual_rewrite(citation, cor, result.get('tese') or 'tese jurídica')
-        if cor.get('tipo') == 'sumula':
-            result['substituicao_textual'] = f"Súmula TCU {cor.get('numero_sumula')}"
-        elif cor.get('tipo') == 'jurisprudencia':
-            result['substituicao_textual'] = f"Jurisprudência {cor.get('numero_acordao')}/{cor.get('ano_acordao')}"
-        else:
-            result['substituicao_textual'] = f"TCU, Acórdão nº {cor.get('numero_acordao_num') or cor.get('numero_acordao')}/{cor.get('ano_acordao')} - {cor.get('colegiado')}"
+            result['status_label'] = 'Número válido, mas fundamento fraco para a tese'
+            result['grau_confianca'] = 'Baixa confiança'
+    kinds = {citation.get('kind')} if citation.get('kind') else None
+    alts = search_candidates(db_files, citation.get('contexto', '') or citation.get('raw', ''), thesis.get('chave'), kinds=kinds, top_k=top_k)
+    if result['status'] != 'valida_compatível':
+        result['alternativas'] = [a for a in alts if (not exact) or a.get('numero') != exact.get('numero')][:top_k]
+        if result['alternativas']:
+            best = result['alternativas'][0]
+            result['correcao_sugerida'] = best
+            if result['status'] == 'nao_localizada':
+                result['status'] = 'divergente'
+                result['status_label'] = 'Citação divergente ou inadequada'
+                result['grau_confianca'] = 'Baixa confiança'
+            result['substituicao_textual'] = build_short_reference(best)
+            result['paragrafo_reescrito'] = suggest_rewrite(citation.get('contexto', ''), best, thesis.get('label', 'Tese geral'))
     return result
