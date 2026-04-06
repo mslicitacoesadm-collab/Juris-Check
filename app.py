@@ -13,7 +13,7 @@ from modules.piece_reader import inspect_extraction, read_uploaded_file
 from modules.report_builder import build_export_rows, build_markdown_report
 from modules.search_engine import build_thesis_paragraph, search_candidates, validate_citation
 
-st.set_page_config(page_title='Atlas de Precedentes MS V9', page_icon='⚖️', layout='wide')
+st.set_page_config(page_title='Atlas de Precedentes MS V10', page_icon='⚖️', layout='wide')
 
 BASE_DIR = Path(__file__).parent
 DB_DIR = BASE_DIR / 'data' / 'base'
@@ -72,9 +72,9 @@ with logo_col:
 with hero_col:
     st.markdown("""
     <div class='hero'>
-        <h1>Atlas de Precedentes MS · V9 Premium</h1>
-        <p><strong>Upload primeiro, busca manual depois.</strong> A V9 reorganiza a jornada: o usuário sobe a peça, o sistema entende a tese, valida citações e só depois abre a pesquisa manual como complemento estratégico.</p>
-        <p><strong>Evolução principal:</strong> leitura estrutural da peça, identificação de tese principal, auditoria de acórdão/súmula e sugestão contextual de precedentes.</p>
+        <h1>Atlas de Precedentes MS · Validação Profissional</h1>
+        <p><strong>Foco principal da ferramenta:</strong> validar citações de acórdão, jurisprudência e súmula inseridas na peça, conferir se batem com a base e apontar a correção mais aderente quando houver erro.</p>
+        <p><strong>Evolução aplicada:</strong> leitura mais precisa da tese, motor de match refinado e busca manual mantida como apoio, sem desviar do núcleo da plataforma.</p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -83,7 +83,7 @@ with st.sidebar:
     top_k = st.slider('Máximo de precedentes por tese', 1, 5, 3)
     max_blocks = st.slider('Blocos argumentativos analisados', 3, 12, 6)
     force_piece = st.selectbox('Foco da análise', ['Automático', 'Recurso administrativo', 'Contrarrazão', 'Impugnação'])
-    st.caption('A busca manual permanece no sistema, mas agora fica como apoio após a revisão automática.')
+    st.caption('A prioridade do sistema é validar, corrigir e reforçar precedentes citados na peça. A busca manual entra como apoio complementar.')
 
 c1, c2, c3, c4 = st.columns(4)
 c1.metric('Precedentes totais', f"{summary['total_registros']:,}".replace(',', '.'))
@@ -91,12 +91,12 @@ c2.metric('Acórdãos', f"{summary['por_tipo']['acordao']:,}".replace(',', '.'))
 c3.metric('Jurisprudências', f"{summary['por_tipo']['jurisprudencia']:,}".replace(',', '.'))
 c4.metric('Súmulas', f"{summary['por_tipo']['sumula']:,}".replace(',', '.'))
 
-main_tabs = st.tabs(['1. Upload e análise', '2. Resultado da revisão', '3. Busca manual de precedentes', '4. Histórico'])
+main_tabs = st.tabs(['1. Upload e validação', '2. Resultado técnico', '3. Busca manual de precedentes', '4. Histórico'])
 
 with main_tabs[0]:
-    uploaded_file = st.file_uploader('Envie a peça para análise', type=['pdf', 'docx', 'txt'])
+    uploaded_file = st.file_uploader('Envie a peça para validação técnica', type=['pdf', 'docx', 'txt'])
     manual_text = st.text_area('Ou cole o texto da peça aqui', height=180)
-    analyze = st.button('Analisar peça agora', type='primary', use_container_width=True)
+    analyze = st.button('Validar peça agora', type='primary', use_container_width=True)
 
     if analyze:
         if not db_files:
@@ -153,16 +153,16 @@ with main_tabs[0]:
         st.session_state.analysis_history.insert(0, {'timestamp': datetime.now().strftime('%d/%m/%Y %H:%M'), 'arquivo': file_name, 'tipo': piece_type['tipo'], 'citacoes': len(citation_results), 'teses': len(thesis_results), 'qualidade': extraction['qualidade']})
         st.session_state.analysis_history = st.session_state.analysis_history[:15]
 
-        st.success('Análise concluída. Veja a aba “Resultado da revisão”.')
+        st.success('Validação concluída. Veja a aba “Resultado técnico”.')
         d1, d2, d3, d4 = st.columns(4)
-        d1.metric('Palavras extraídas', extraction['palavras'])
-        d2.metric('Qualidade da leitura', extraction['qualidade'].capitalize())
-        d3.metric('Citações localizadas', len(citation_results))
-        d4.metric('Teses com sugestão', len(thesis_results))
+        d1.metric('Citações localizadas', len(citation_results))
+        d2.metric('Citações validadas', sum(1 for x in citation_results if x['status'] == 'valida_compatível'))
+        d3.metric('Citações com correção', sum(1 for x in citation_results if x.get('correcao_sugerida')))
+        d4.metric('Teses com reforço', len(thesis_results))
         if extraction['alertas']:
             for alert in extraction['alertas']:
                 st.warning(alert)
-        st.markdown('### Prévia da peça lida')
+        st.markdown('### Prévia do conteúdo lido')
         st.text_area('Texto extraído', piece_text[:6000], height=280)
 
 with main_tabs[1]:
@@ -183,22 +183,22 @@ with main_tabs[1]:
         r3.metric('Validadas', sum(1 for x in citation_results if x['status'] == 'valida_compatível'))
         r4.metric('Para revisar', sum(1 for x in citation_results if x['status'] != 'valida_compatível'))
 
-        st.markdown('### Diagnóstico da varredura')
-        st.markdown(f"- **Qualidade da extração:** {extraction['qualidade']}  ")
-        st.markdown(f"- **Parágrafos lidos:** {structure.get('total_paragrafos', 0)}  ")
-        st.markdown(f"- **Resumo inicial da tese:** {structure.get('resumo_inicial', '-')}")
+        st.markdown('### Diagnóstico técnico')
+        st.markdown(f"- **Qualidade da leitura:** {extraction['qualidade']}  ")
+        st.markdown(f"- **Tese principal detectada:** {structure.get('tese_principal', '-')}  ")
+        st.markdown(f"- **Resumo objetivo:** {structure.get('resumo_inicial', '-')}")
 
-        st.markdown('### Citações auditadas')
+        st.markdown('### Validação e correção de citações')
         if not citation_results:
             st.info('Nenhuma citação explícita de acórdão ou súmula foi localizada na peça.')
         for item in citation_results:
             st.markdown(f"<div class='result-card'><strong>{item.get('raw')}</strong><br><span class='small'>Status: {item.get('status_label')} · tese relacionada: {item.get('tese')} · risco: {item.get('risco')}</span><br><span class='small'>Contexto: {item.get('contexto')}</span></div>", unsafe_allow_html=True)
             if item.get('matched_record'):
-                st.caption(f"Validado em: {item['matched_record'].get('citacao_curta')}")
+                st.caption(f"Base localizada: {item['matched_record'].get('citacao_curta')}")
             if item.get('correcao_sugerida'):
-                st.caption(f"Sugestão: {item['correcao_sugerida'].get('citacao_curta')}")
+                st.caption(f"Correção sugerida: {item['correcao_sugerida'].get('citacao_curta')}")
 
-        st.markdown('### Sugestões por tese detectada')
+        st.markdown('### Reforços sugeridos por tese')
         for block in thesis_results:
             st.markdown(f"#### {block['tese']}")
             st.caption(block['trecho_curto'])
@@ -207,16 +207,17 @@ with main_tabs[1]:
 
         export_rows = build_export_rows(analysis)
         report_md = build_markdown_report(st.session_state.last_file_name or 'arquivo', analysis)
-        docx_bytes = build_docx_bytes(corrected_text, st.session_state.last_file_name or 'arquivo', analysis)
-        pdf_bytes = build_pdf_bytes(corrected_text, st.session_state.last_file_name or 'arquivo', analysis)
+        export_title = f"Peça revisada - {st.session_state.last_file_name or 'arquivo'}"
+        docx_bytes = build_docx_bytes(corrected_text, export_title, analysis)
+        pdf_bytes = build_pdf_bytes(corrected_text, export_title, analysis)
         csv_bytes = pd.DataFrame(export_rows).to_csv(index=False).encode('utf-8-sig')
 
         st.markdown('### Downloads')
         cdl1, cdl2, cdl3, cdl4 = st.columns(4)
-        cdl1.download_button('Baixar peça revisada (.docx)', data=docx_bytes, file_name='peca_revisada_v9.docx', mime='application/vnd.openxmlformats-officedocument.wordprocessingml.document', use_container_width=True)
-        cdl2.download_button('Baixar peça revisada (.pdf)', data=pdf_bytes, file_name='peca_revisada_v9.pdf', mime='application/pdf', use_container_width=True)
-        cdl3.download_button('Baixar relatório (.md)', data=report_md.encode('utf-8'), file_name='relatorio_precedentes_v9.md', mime='text/markdown', use_container_width=True)
-        cdl4.download_button('Baixar auditoria (.csv)', data=csv_bytes, file_name='auditoria_precedentes_v9.csv', mime='text/csv', use_container_width=True)
+        cdl1.download_button('Baixar peça revisada (.docx)', data=docx_bytes, file_name='peca_revisada.docx', mime='application/vnd.openxmlformats-officedocument.wordprocessingml.document', use_container_width=True)
+        cdl2.download_button('Baixar peça revisada (.pdf)', data=pdf_bytes, file_name='peca_revisada.pdf', mime='application/pdf', use_container_width=True)
+        cdl3.download_button('Baixar relatório (.md)', data=report_md.encode('utf-8'), file_name='relatorio_precedentes.md', mime='text/markdown', use_container_width=True)
+        cdl4.download_button('Baixar auditoria (.csv)', data=csv_bytes, file_name='auditoria_precedentes.csv', mime='text/csv', use_container_width=True)
 
 with main_tabs[2]:
     st.markdown('### Busca manual de precedentes')
