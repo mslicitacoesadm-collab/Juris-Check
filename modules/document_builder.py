@@ -11,6 +11,38 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
 
 
+def _analysis_piece_type(analysis: Dict[str, Any] | None) -> str:
+    if not isinstance(analysis, dict):
+        return 'Não identificado'
+    piece = analysis.get('piece_type')
+    if isinstance(piece, dict):
+        return piece.get('tipo', 'Não identificado')
+    if isinstance(piece, str) and piece.strip():
+        return piece.strip()
+    return 'Não identificado'
+
+
+def _coerce_title_and_analysis(title_or_analysis: Any, maybe_analysis: Any) -> tuple[str, Dict[str, Any]]:
+    title = 'Peça revisada'
+    analysis: Dict[str, Any] = {}
+
+    if isinstance(title_or_analysis, dict) and isinstance(maybe_analysis, str):
+        analysis = title_or_analysis
+        title = maybe_analysis or title
+    elif isinstance(title_or_analysis, str) and isinstance(maybe_analysis, dict):
+        title = title_or_analysis or title
+        analysis = maybe_analysis
+    elif isinstance(title_or_analysis, dict):
+        analysis = title_or_analysis
+    elif isinstance(maybe_analysis, dict):
+        analysis = maybe_analysis
+        if isinstance(title_or_analysis, str) and title_or_analysis.strip():
+            title = title_or_analysis.strip()
+    elif isinstance(title_or_analysis, str) and title_or_analysis.strip():
+        title = title_or_analysis.strip()
+
+    return title, analysis
+
 
 def _replace_citations(text: str, citation_results: List[Dict[str, Any]]) -> str:
     updated = text
@@ -22,19 +54,18 @@ def _replace_citations(text: str, citation_results: List[Dict[str, Any]]) -> str
     return updated
 
 
-
 def _thesis_section(thesis_results: List[Dict[str, Any]]) -> str:
     if not thesis_results:
         return ''
-    lines = ['\nVI. DAS TESES DE REFORÇO SUGERIDAS PELO SISTEMA\n']
+    lines = ['\nVI. DOS PRECEDENTES SUGERIDOS PELO SISTEMA\n']
     for idx, item in enumerate(thesis_results[:2], start=1):
-        lines.append(f"{6}.{idx}. {item.get('tese','Tese jurídica')}\n")
+        lines.append(f"6.{idx}. {item.get('tese', 'Tese jurídica')}\n")
         for sug in item.get('sugestoes', [])[:2]:
             par = sug.get('paragrafo_aplicado') or sug.get('citacao_curta')
-            lines.append(par)
-            lines.append('')
+            if par:
+                lines.append(par)
+                lines.append('')
     return '\n'.join(lines).strip()
-
 
 
 def build_revised_text(original_text: str, analysis: Dict[str, Any]) -> str:
@@ -47,8 +78,9 @@ def build_revised_text(original_text: str, analysis: Dict[str, Any]) -> str:
     return revised
 
 
+def build_docx_bytes(revised_text: str, title_or_analysis: Any = None, analysis: Dict[str, Any] | None = None) -> bytes:
+    title, analysis = _coerce_title_and_analysis(title_or_analysis, analysis)
 
-def build_docx_bytes(revised_text: str, analysis: Dict[str, Any], title: str = 'Peça revisada') -> bytes:
     doc = Document()
     style = doc.styles['Normal']
     style.font.name = 'Arial'
@@ -57,7 +89,7 @@ def build_docx_bytes(revised_text: str, analysis: Dict[str, Any], title: str = '
     doc.add_heading(title, level=1)
     info = doc.add_paragraph()
     info.add_run('Tipo identificado: ').bold = True
-    info.add_run(analysis.get('piece_type', {}).get('tipo', 'Não identificado'))
+    info.add_run(_analysis_piece_type(analysis))
 
     doc.add_paragraph('')
     for part in revised_text.split('\n'):
@@ -68,13 +100,14 @@ def build_docx_bytes(revised_text: str, analysis: Dict[str, Any], title: str = '
     return bio.getvalue()
 
 
+def build_pdf_bytes(revised_text: str, title_or_analysis: Any = None, analysis: Dict[str, Any] | None = None) -> bytes:
+    title, analysis = _coerce_title_and_analysis(title_or_analysis, analysis)
 
-def build_pdf_bytes(revised_text: str, analysis: Dict[str, Any], title: str = 'Peça revisada') -> bytes:
     bio = BytesIO()
     doc = SimpleDocTemplate(bio, pagesize=A4, rightMargin=36, leftMargin=36, topMargin=36, bottomMargin=36)
     styles = getSampleStyleSheet()
     story = [Paragraph(f'<b>{title}</b>', styles['Title']), Spacer(1, 12)]
-    story.append(Paragraph(f"<b>Tipo identificado:</b> {analysis.get('piece_type', {}).get('tipo', 'Não identificado')}", styles['Normal']))
+    story.append(Paragraph(f"<b>Tipo identificado:</b> {_analysis_piece_type(analysis)}", styles['Normal']))
     story.append(Spacer(1, 10))
     safe_text = revised_text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
     for para in safe_text.split('\n'):

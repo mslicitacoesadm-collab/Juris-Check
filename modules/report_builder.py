@@ -38,17 +38,17 @@ def build_export_rows(analysis: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 def build_markdown_report(file_name: str, analysis: Dict[str, Any]) -> str:
-    lines = ['# Relatório premium de precedentes', '', f'**Arquivo analisado:** {file_name}', '', f"**Tipo identificado:** {analysis.get('piece_type', {}).get('tipo', 'Não identificado')}", f"**Confiança:** {analysis.get('piece_type', {}).get('confianca', 'baixa')}", '']
+    lines = ['# Relatório técnico de validação de precedentes', '', f'**Arquivo analisado:** {file_name}', '', f"**Tipo identificado:** {analysis.get('piece_type', {}).get('tipo', 'Não identificado')}", f"**Confiança:** {analysis.get('piece_type', {}).get('confianca', 'baixa')}", '']
     estrutura = analysis.get('piece_structure', {})
-    lines += ['## Leitura estrutural', f"- Tese principal detectada: **{estrutura.get('tese_principal','-')}**", f"- Parágrafos analisados: **{estrutura.get('total_paragrafos','-')}**", f"- Citações encontradas: **{len(analysis.get('citation_results', []))}**", '']
-    lines.append('## Citações auditadas')
+    lines += ['## Síntese da análise', f"- Tese principal detectada: **{estrutura.get('tese_principal','-')}**", f"- Parágrafos analisados: **{estrutura.get('total_paragrafos','-')}**", f"- Citações encontradas: **{len(analysis.get('citation_results', []))}**", '']
+    lines.append('## Validação das citações')
     for item in analysis.get('citation_results', []):
         lines.append(f"- `{item.get('raw','')}` → **{item.get('status_label','')}** · risco: **{item.get('risco','-')}**")
         if item.get('correcao_sugerida'):
             sug = item['correcao_sugerida']
             lines.append(f"  - Sugestão: {sug.get('tipo','')} {sug.get('numero_identificador','')}")
     lines.append('')
-    lines.append('## Sugestões por tese')
+    lines.append('## Reforços sugeridos por tese')
     for item in analysis.get('thesis_results', []):
         lines.append(f"### {item.get('tese','')}")
         lines.append(item.get('trecho_curto',''))
