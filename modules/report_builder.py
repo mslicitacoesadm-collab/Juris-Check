@@ -3,11 +3,6 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 
-def _ref(rec: Dict[str, Any]) -> str:
-    if not rec:
-        return ''
-    return rec.get('citacao_base') or rec.get('citacao_curta') or rec.get('numero_acordao') or rec.get('numero_precedente') or ''
-
 
 def build_export_rows(analysis: Dict[str, Any]) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
@@ -15,9 +10,11 @@ def build_export_rows(analysis: Dict[str, Any]) -> List[Dict[str, Any]]:
         rows.append({
             'tipo': 'citacao',
             'citacao_encontrada': item.get('raw', ''),
+            'categoria': item.get('tipo_citacao', ''),
             'status': item.get('status_label', ''),
-            'precedente_validado': _ref(item.get('matched_record') or {}),
-            'correcao_sugerida': _ref(item.get('correcao_sugerida') or {}),
+            'precedente_validado': (item.get('matched_record') or {}).get('numero_identificador', ''),
+            'tipo_validado': (item.get('matched_record') or {}).get('tipo', ''),
+            'correcao_sugerida': (item.get('correcao_sugerida') or {}).get('numero_identificador', ''),
             'tese': item.get('tese', ''),
             'risco': item.get('risco', ''),
             'score_contexto': item.get('score_contexto', ''),
@@ -27,9 +24,11 @@ def build_export_rows(analysis: Dict[str, Any]) -> List[Dict[str, Any]]:
             rows.append({
                 'tipo': f'tese_{idx}',
                 'citacao_encontrada': item.get('tese', ''),
+                'categoria': sug.get('tipo', ''),
                 'status': 'Sugestão por tese',
                 'precedente_validado': '',
-                'correcao_sugerida': _ref(sug),
+                'tipo_validado': '',
+                'correcao_sugerida': sug.get('numero_identificador', ''),
                 'tese': item.get('tese', ''),
                 'risco': sug.get('risco', ''),
                 'score_contexto': sug.get('compat_score', ''),
@@ -39,25 +38,20 @@ def build_export_rows(analysis: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 def build_markdown_report(file_name: str, analysis: Dict[str, Any]) -> str:
-    lines = [
-        '# Relatório premium de validação jurisprudencial',
-        '',
-        f'**Arquivo analisado:** {file_name}',
-        '',
-        f"**Tipo identificado:** {analysis.get('piece_type', {}).get('tipo', 'Não identificado')}",
-        f"**Confiança:** {analysis.get('piece_type', {}).get('confianca', 'baixa')}",
-        '',
-        '## Citações auditadas',
-    ]
+    lines = ['# Relatório premium de precedentes', '', f'**Arquivo analisado:** {file_name}', '', f"**Tipo identificado:** {analysis.get('piece_type', {}).get('tipo', 'Não identificado')}", f"**Confiança:** {analysis.get('piece_type', {}).get('confianca', 'baixa')}", '']
+    estrutura = analysis.get('piece_structure', {})
+    lines += ['## Leitura estrutural', f"- Tese principal detectada: **{estrutura.get('tese_principal','-')}**", f"- Parágrafos analisados: **{estrutura.get('total_paragrafos','-')}**", f"- Citações encontradas: **{len(analysis.get('citation_results', []))}**", '']
+    lines.append('## Citações auditadas')
     for item in analysis.get('citation_results', []):
         lines.append(f"- `{item.get('raw','')}` → **{item.get('status_label','')}** · risco: **{item.get('risco','-')}**")
         if item.get('correcao_sugerida'):
-            lines.append(f"  - Correção sugerida: {_ref(item['correcao_sugerida'])}")
+            sug = item['correcao_sugerida']
+            lines.append(f"  - Sugestão: {sug.get('tipo','')} {sug.get('numero_identificador','')}")
     lines.append('')
-    lines.append('## Reforços por tese')
+    lines.append('## Sugestões por tese')
     for item in analysis.get('thesis_results', []):
         lines.append(f"### {item.get('tese','')}")
         lines.append(item.get('trecho_curto',''))
         for sug in item.get('sugestoes', [])[:3]:
-            lines.append(f"- {_ref(sug)}")
+            lines.append(f"- {sug.get('citacao_curta','')}")
     return '\n'.join(lines)

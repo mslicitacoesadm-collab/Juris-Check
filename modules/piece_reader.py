@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from io import BytesIO
-from typing import Any
+from typing import Any, Dict
 
 import docx
 import pdfplumber
+
 
 
 def read_uploaded_file(uploaded_file: Any) -> str:
@@ -27,3 +28,22 @@ def read_uploaded_file(uploaded_file: Any) -> str:
                     pages.append(txt)
         return '\n\n'.join(pages)
     raise ValueError('Formato não suportado. Use PDF, DOCX ou TXT.')
+
+
+
+def inspect_extraction(text: str) -> Dict[str, object]:
+    lines = [ln for ln in (text or '').splitlines() if ln.strip()]
+    words = (text or '').split()
+    avg_line = round(sum(len(ln) for ln in lines) / max(len(lines), 1), 1) if lines else 0
+    quality = 'boa'
+    alerts = []
+    if len(words) < 80:
+        quality = 'baixa'
+        alerts.append('Texto extraído muito curto; o arquivo pode ser imagem ou conter pouca camada textual.')
+    if avg_line > 220:
+        quality = 'média' if quality == 'boa' else quality
+        alerts.append('Linhas muito longas sugerem quebra irregular na extração.')
+    if not lines:
+        quality = 'baixa'
+        alerts.append('Nenhum texto foi extraído do documento.')
+    return {'palavras': len(words), 'linhas': len(lines), 'media_linha': avg_line, 'qualidade': quality, 'alertas': alerts}
