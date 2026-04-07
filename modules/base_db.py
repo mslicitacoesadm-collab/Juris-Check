@@ -58,29 +58,21 @@ def row_to_normalized_dict(row: sqlite3.Row | Dict[str, Any], schema: Dict[str, 
     kind = schema.get('kind', 'desconhecido')
     if kind == 'acordao':
         data = {
-            'id': raw.get('id') or raw.get('rowid') or '',
-            'tipo': 'Acórdão',
+            'id': raw.get('id') or raw.get('rowid') or '', 'tipo': 'Acórdão',
             'numero': str(raw.get('numero_acordao_num') or raw.get('numero_acordao') or ''),
             'numero_num': str(raw.get('numero_acordao_num') or raw.get('numero_acordao') or ''),
-            'ano': str(raw.get('ano_acordao') or ''),
-            'colegiado': raw.get('colegiado') or '',
-            'tema': raw.get('assunto') or raw.get('tema') or '',
-            'subtema': raw.get('subtema') or '',
+            'ano': str(raw.get('ano_acordao') or ''), 'colegiado': raw.get('colegiado') or '',
+            'tema': raw.get('assunto') or raw.get('tema') or '', 'subtema': raw.get('subtema') or '',
             'resumo': raw.get('sumario') or raw.get('ementa_match') or raw.get('texto_match') or '',
             'excerto': raw.get('decisao') or raw.get('acordao_texto') or raw.get('sumario') or '',
-            'tags': raw.get('tags') or '',
-            'fonte_db': raw.get('_source_db') or '',
+            'tags': raw.get('tags') or '', 'fonte_db': raw.get('_source_db') or '',
         }
     elif kind == 'jurisprudencia':
         data = {
-            'id': raw.get('id') or raw.get('rowid') or '',
-            'tipo': 'Jurisprudência',
-            'numero': str(raw.get('numacordao') or ''),
-            'numero_num': str(raw.get('numacordao') or ''),
-            'ano': str(raw.get('anoacordao') or ''),
-            'colegiado': raw.get('colegiado') or '',
-            'tema': raw.get('tema') or raw.get('area') or '',
-            'subtema': raw.get('subtema') or '',
+            'id': raw.get('id') or raw.get('rowid') or '', 'tipo': 'Jurisprudência',
+            'numero': str(raw.get('numacordao') or ''), 'numero_num': str(raw.get('numacordao') or ''),
+            'ano': str(raw.get('anoacordao') or ''), 'colegiado': raw.get('colegiado') or '',
+            'tema': raw.get('tema') or raw.get('area') or '', 'subtema': raw.get('subtema') or '',
             'resumo': raw.get('enunciado') or '',
             'excerto': raw.get('excerto') or raw.get('paragrafolc') or raw.get('indexadoresconsolidados') or '',
             'tags': ' '.join(filter(None, [raw.get('indexacao') or '', raw.get('referencialegal') or ''])).strip(),
@@ -88,25 +80,16 @@ def row_to_normalized_dict(row: sqlite3.Row | Dict[str, Any], schema: Dict[str, 
         }
     elif kind == 'sumula':
         data = {
-            'id': raw.get('id') or raw.get('rowid') or '',
-            'tipo': 'Súmula',
-            'numero': str(raw.get('numero') or ''),
-            'numero_num': str(raw.get('numero') or ''),
-            'ano': str(raw.get('anoaprovacao') or ''),
-            'colegiado': raw.get('colegiado') or '',
-            'tema': raw.get('tema') or raw.get('area') or '',
-            'subtema': raw.get('subtema') or '',
-            'resumo': raw.get('enunciado') or '',
-            'excerto': raw.get('excerto') or raw.get('enunciado') or '',
+            'id': raw.get('id') or raw.get('rowid') or '', 'tipo': 'Súmula',
+            'numero': str(raw.get('numero') or ''), 'numero_num': str(raw.get('numero') or ''),
+            'ano': str(raw.get('anoaprovacao') or ''), 'colegiado': raw.get('colegiado') or '',
+            'tema': raw.get('tema') or raw.get('area') or '', 'subtema': raw.get('subtema') or '',
+            'resumo': raw.get('enunciado') or '', 'excerto': raw.get('excerto') or raw.get('enunciado') or '',
             'tags': ' '.join(filter(None, [raw.get('indexacao') or '', raw.get('referencialegal') or ''])).strip(),
             'fonte_db': raw.get('_source_db') or '',
         }
     else:
-        data = {
-            'id': raw.get('id') or raw.get('rowid') or '',
-            'tipo': 'Precedente', 'numero': '', 'numero_num': '', 'ano': '', 'colegiado': '',
-            'tema': '', 'subtema': '', 'resumo': '', 'excerto': '', 'tags': '', 'fonte_db': raw.get('_source_db') or ''
-        }
+        data = {'id': raw.get('id') or raw.get('rowid') or '', 'tipo': 'Precedente', 'numero': '', 'numero_num': '', 'ano': '', 'colegiado': '', 'tema': '', 'subtema': '', 'resumo': '', 'excerto': '', 'tags': '', 'fonte_db': raw.get('_source_db') or ''}
     return data
 
 

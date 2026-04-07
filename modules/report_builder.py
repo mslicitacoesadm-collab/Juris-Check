@@ -14,6 +14,7 @@ def build_export_rows(analysis: Dict[str, Any]) -> List[Dict[str, Any]]:
             'status': item.get('status_label'),
             'tese': item.get('tese'),
             'grau_confianca': item.get('grau_confianca'),
+            'motivo_match': item.get('motivo_match', ''),
             'sugestao': suggestion.get('citacao_curta') or item.get('substituicao_textual') or '',
         })
     return rows

@@ -8,13 +8,19 @@ JURIS_RE = re.compile(r'(?i)jurisprud[êe]ncia\s*(?:n[ºo°]\s*)?(?P<num>\d{1,5}
 SUMULA_RE = re.compile(r'(?i)(?:s[úu]mula\s*(?:tcu)?\s*(?:n[ºo°]\s*)?)(?P<num>\d{1,4})')
 
 THESIS_KEYWORDS = {
-    'formalismo_moderado': ['formalismo moderado', 'erro formal', 'vício sanável', 'vicio sanavel', 'falha sanável', 'falha sanavel'],
-    'diligencia': ['diligência', 'diligencia', 'saneamento', 'esclarecimentos', 'sanar', 'oportunidade de comprovação', 'oportunidade de comprovacao'],
-    'inexequibilidade': ['inexequível', 'inexequivel', 'inexequibilidade', 'exequibilidade'],
-    'vinculacao_edital': ['vinculação ao edital', 'vinculacao ao edital', 'instrumento convocatório', 'instrumento convocatorio', 'exigência não prevista', 'exigencia nao prevista'],
-    'competitividade': ['competitividade', 'ampla disputa', 'restrição indevida', 'restricao indevida', 'proposta mais vantajosa', 'vantajosidade'],
-    'habilitacao_capacidade': ['habilitação', 'habilitacao', 'capacidade técnica', 'capacidade tecnica', 'atestado', 'qualificação técnica', 'qualificacao tecnica'],
-    'julgamento_objetivo': ['julgamento objetivo', 'critério subjetivo', 'criterio subjetivo', 'razoabilidade', 'proporcionalidade'],
+    'formalismo_moderado': ['formalismo moderado', 'erro formal', 'vício sanável', 'vicio sanavel', 'falha sanável', 'falha sanavel', 'mero formalismo', 'rigor excessivo'],
+    'diligencia': ['diligência', 'diligencia', 'saneamento', 'esclarecimentos', 'sanar', 'oportunidade de comprovação', 'oportunidade de comprovacao', 'prévia diligência', 'previa diligencia'],
+    'inexequibilidade': ['inexequível', 'inexequivel', 'inexequibilidade', 'exequibilidade', 'exequível', 'execução contratual'],
+    'vinculacao_edital': ['vinculação ao edital', 'vinculacao ao edital', 'instrumento convocatório', 'instrumento convocatorio', 'exigência não prevista', 'exigencia nao prevista', 'lei interna do certame'],
+    'competitividade': ['competitividade', 'ampla disputa', 'restrição indevida', 'restricao indevida', 'proposta mais vantajosa', 'vantajosidade', 'isonomia', 'seleção da proposta mais vantajosa'],
+    'habilitacao_capacidade': ['habilitação', 'habilitacao', 'capacidade técnica', 'capacidade tecnica', 'atestado', 'qualificação técnica', 'qualificacao tecnica', 'aptidão', 'acervo técnico', 'acervo tecnico'],
+    'julgamento_objetivo': ['julgamento objetivo', 'critério subjetivo', 'criterio subjetivo', 'razoabilidade', 'proporcionalidade', 'motivação suficiente', 'motivacao suficiente'],
+}
+THESIS_EXPANSIONS = {
+    'formalismo_moderado': ['aproveitamento da proposta', 'saneamento', 'erro sanável', 'ausência de prejuízo'],
+    'diligencia': ['esclarecimento', 'complementação documental', 'vedação ao formalismo excessivo', 'saneamento de falhas'],
+    'competitividade': ['ampla concorrência', 'interesse público', 'vantajosidade', 'economia processual'],
+    'habilitacao_capacidade': ['objeto similar', 'compatibilidade do atestado', 'qualificação econômico-financeira'],
 }
 THESIS_LABEL_MAP = {
     'formalismo_moderado': 'Formalismo moderado',
@@ -35,6 +41,10 @@ PIECE_SIGNAL_MAP = {
 
 def normalize_space(text: str) -> str:
     return re.sub(r'\s+', ' ', text or '').strip()
+
+
+def tokenize(text: str) -> List[str]:
+    return re.findall(r'[a-zà-ÿ0-9]{3,}', (text or '').lower())
 
 
 def classify_piece_type(text: str) -> Dict[str, str | int]:
@@ -64,7 +74,7 @@ def extract_references_with_context(text: str) -> List[Dict[str, str]]:
                 ano = (m.groupdict().get('ano') or '').strip()
                 colegiado = normalize_space(m.groupdict().get('colegiado') or '')
                 raw = normalize_space(m.group(0))
-                key = (kind, numero, ano, colegiado.lower(), raw.lower())
+                key = (kind, numero, ano, colegiado.lower(), raw.lower(), idx)
                 if key in seen:
                     continue
                 seen.add(key)
@@ -79,8 +89,19 @@ def detect_thesis(text: str) -> Dict[str, str | int]:
     for thesis, patterns in THESIS_KEYWORDS.items():
         for pat in patterns:
             if pat in lower:
-                scores[thesis] += 2
+                gain = 3 if ' ' in pat else 2
+                scores[thesis] += gain
                 hits[thesis].append(pat)
+        for pat in THESIS_EXPANSIONS.get(thesis, []):
+            if pat in lower:
+                scores[thesis] += 1
+                hits[thesis].append(pat)
+    # small cross-signal bonus
+    if scores['formalismo_moderado'] and scores['diligencia']:
+        scores['formalismo_moderado'] += 2
+        scores['diligencia'] += 2
+    if scores['competitividade'] and scores['diligencia']:
+        scores['competitividade'] += 1
     best = max(scores, key=scores.get) if scores else 'geral'
     if scores.get(best, 0) == 0:
         best = 'geral'
@@ -90,15 +111,23 @@ def detect_thesis(text: str) -> Dict[str, str | int]:
 def split_into_argument_blocks(text: str, max_blocks: int = 10) -> List[Dict[str, str]]:
     raw_blocks = re.split(r'\n\s*\n+', text or '')
     blocks: List[Dict[str, str]] = []
-    for raw in raw_blocks:
+    for order, raw in enumerate(raw_blocks):
         block = normalize_space(raw)
         if len(block) < 120:
             continue
         thesis = detect_thesis(block)
-        if thesis['chave'] == 'geral' and len(block) < 240:
+        if thesis['chave'] == 'geral' and len(block) < 220:
             continue
         preview = block[:320].rsplit(' ', 1)[0] + '...' if len(block) > 320 else block
-        blocks.append({'texto': block, 'tese': thesis['label'], 'tese_chave': thesis['chave'], 'preview': preview, 'score_tese': thesis['score'], 'fundamentos': ', '.join(thesis['fundamentos'][:4])})
+        blocks.append({
+            'id': order,
+            'texto': block,
+            'tese': thesis['label'],
+            'tese_chave': thesis['chave'],
+            'preview': preview,
+            'score_tese': thesis['score'],
+            'fundamentos': ', '.join(thesis['fundamentos'][:5]),
+        })
         if len(blocks) >= max_blocks:
             break
     return blocks
