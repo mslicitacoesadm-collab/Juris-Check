@@ -1,21 +1,15 @@
-# Atlas dos Acórdãos V13 Profissional
+# Atlas dos Acórdãos V14 Realista
 
-Sistema em Streamlit para auditoria de citações jurídicas em peças licitatórias.
+Versão revisada do sistema com foco em:
+- auditoria de citações geradas por IA
+- validação em base própria
+- correção automática de acórdão, jurisprudência e súmula
+- match semântico por tese
+- reescrita jurídica contextual do parágrafo
 
 ## Como usar
-1. Instale as dependências:
-   ```bash
-   pip install -r requirements.txt
-   ```
-2. Coloque seus arquivos `.db` em `data/base/`.
+1. Coloque seus arquivos `.db` em `data/base/`
+2. Instale as dependências:
+   `pip install -r requirements.txt`
 3. Execute:
-   ```bash
-   streamlit run app.py
-   ```
-
-## O foco da ferramenta
-- validar citação de acórdão, súmula e jurisprudência digitada na peça
-- localizar divergências entre o texto e a base
-- sugerir precedentes melhores para a tese
-- reescrever o trecho com linguagem mais natural
-- exportar peça revisada e relatório de auditoria
+   `streamlit run app.py`
