@@ -21,6 +21,8 @@ THESIS_EXPANSIONS = {
     'diligencia': ['esclarecimento', 'complementação documental', 'vedação ao formalismo excessivo', 'saneamento de falhas'],
     'competitividade': ['ampla concorrência', 'interesse público', 'vantajosidade', 'economia processual'],
     'habilitacao_capacidade': ['objeto similar', 'compatibilidade do atestado', 'qualificação econômico-financeira'],
+    'inexequibilidade': ['composição de custos', 'planilha de composição', 'exequibilidade comprovada', 'diligência antes da desclassificação'],
+    'vinculacao_edital': ['interpretação restritiva do edital', 'vedação à inovação do julgamento', 'respeito ao instrumento convocatório'],
 }
 THESIS_LABEL_MAP = {
     'formalismo_moderado': 'Formalismo moderado',
@@ -34,8 +36,12 @@ THESIS_LABEL_MAP = {
 }
 PIECE_SIGNAL_MAP = {
     'recurso': [('recurso administrativo', 4), ('decisão recorrida', 3), ('provimento do recurso', 4), ('razões recursais', 3)],
-    'contrarrazao': [('contrarrazões', 6), ('não provimento do recurso', 5), ('manutenção da decisão', 4)],
-    'impugnacao': [('impugnação ao edital', 7), ('retificação do edital', 5), ('suspensão do certame', 4)],
+    'contrarrazao': [('contrarrazões', 6), ('contrarrazoes', 6), ('não provimento do recurso', 5), ('manutenção da decisão', 4)],
+    'impugnacao': [('impugnação ao edital', 7), ('impugnacao ao edital', 7), ('retificação do edital', 5), ('suspensão do certame', 4)],
+    'representacao': [('representação', 5), ('representacao', 5), ('tribunal de contas', 3), ('irregularidade', 2), ('medida cautelar', 3)],
+    'resposta_diligencia': [('em atendimento à diligência', 7), ('em atendimento a diligencia', 7), ('cumprimento da diligência', 6), ('esclarecimentos solicitados', 4)],
+    'parecer': [('parecer técnico', 6), ('parecer juridico', 6), ('opina-se', 3), ('conclui-se', 2)],
+    'memoriais': [('memoriais', 6), ('sustentação', 3), ('sustentacao', 3), ('razões finais', 4)],
 }
 
 
@@ -49,15 +55,31 @@ def tokenize(text: str) -> List[str]:
 
 def classify_piece_type(text: str) -> Dict[str, str | int]:
     lower = (text or '').lower()
-    scores = {'recurso': 0, 'contrarrazao': 0, 'impugnacao': 0}
+    scores = {key: 0 for key in PIECE_SIGNAL_MAP}
+    motivos = {key: [] for key in PIECE_SIGNAL_MAP}
     for kind, patterns in PIECE_SIGNAL_MAP.items():
         for pat, weight in patterns:
             if pat in lower:
                 scores[kind] += weight
+                motivos[kind].append(pat)
     best = max(scores, key=scores.get)
-    labels = {'recurso': 'Recurso administrativo', 'contrarrazao': 'Contrarrazão', 'impugnacao': 'Impugnação'}
+    labels = {
+        'recurso': 'Recurso administrativo',
+        'contrarrazao': 'Contrarrazão',
+        'impugnacao': 'Impugnação',
+        'representacao': 'Representação',
+        'resposta_diligencia': 'Resposta à diligência',
+        'parecer': 'Parecer técnico/jurídico',
+        'memoriais': 'Memoriais',
+    }
     confidence = 'alta' if scores[best] >= 6 else 'média' if scores[best] >= 3 else 'baixa'
-    return {'tipo': labels[best], 'chave': best, 'confianca': confidence, 'score': scores[best], 'fundamentos': 'classificação por sinais textuais'}
+    return {
+        'tipo': labels[best],
+        'chave': best,
+        'confianca': confidence,
+        'score': scores[best],
+        'fundamentos': ', '.join(motivos[best][:5]) if motivos[best] else 'classificação por sinais textuais',
+    }
 
 
 def extract_references_with_context(text: str) -> List[Dict[str, str]]:
@@ -67,7 +89,7 @@ def extract_references_with_context(text: str) -> List[Dict[str, str]]:
     for idx, line in enumerate(lines):
         if not line:
             continue
-        context = ' '.join(x for x in lines[max(0, idx-1): min(len(lines), idx+3)] if x)
+        context = ' '.join(x for x in lines[max(0, idx - 1): min(len(lines), idx + 3)] if x)
         for kind, pattern in [('acordao', ACORDAO_RE), ('jurisprudencia', JURIS_RE), ('sumula', SUMULA_RE)]:
             for m in pattern.finditer(line):
                 numero = (m.groupdict().get('num') or '').strip()
@@ -82,7 +104,7 @@ def extract_references_with_context(text: str) -> List[Dict[str, str]]:
     return refs
 
 
-def detect_thesis(text: str) -> Dict[str, str | int]:
+def detect_thesis(text: str) -> Dict[str, str | int | list]:
     lower = (text or '').lower()
     scores = {k: 0 for k in THESIS_KEYWORDS}
     hits = {k: [] for k in THESIS_KEYWORDS}
@@ -96,16 +118,26 @@ def detect_thesis(text: str) -> Dict[str, str | int]:
             if pat in lower:
                 scores[thesis] += 1
                 hits[thesis].append(pat)
-    # small cross-signal bonus
     if scores['formalismo_moderado'] and scores['diligencia']:
         scores['formalismo_moderado'] += 2
         scores['diligencia'] += 2
     if scores['competitividade'] and scores['diligencia']:
         scores['competitividade'] += 1
-    best = max(scores, key=scores.get) if scores else 'geral'
-    if scores.get(best, 0) == 0:
+    ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    best, best_score = ranked[0] if ranked else ('geral', 0)
+    second, second_score = ranked[1] if len(ranked) > 1 else ('geral', 0)
+    if best_score == 0:
         best = 'geral'
-    return {'chave': best, 'label': THESIS_LABEL_MAP.get(best, 'Tese geral'), 'score': scores.get(best, 0), 'fundamentos': hits.get(best, [])}
+    secondary = second if second_score >= 3 and second != best else ''
+    return {
+        'chave': best,
+        'label': THESIS_LABEL_MAP.get(best, 'Tese geral'),
+        'score': scores.get(best, 0),
+        'fundamentos': hits.get(best, []),
+        'secundaria_chave': secondary,
+        'secundaria_label': THESIS_LABEL_MAP.get(secondary, '') if secondary else '',
+        'ranking': ranked[:3],
+    }
 
 
 def split_into_argument_blocks(text: str, max_blocks: int = 10) -> List[Dict[str, str]]:
@@ -124,9 +156,10 @@ def split_into_argument_blocks(text: str, max_blocks: int = 10) -> List[Dict[str
             'texto': block,
             'tese': thesis['label'],
             'tese_chave': thesis['chave'],
+            'tese_secundaria': thesis.get('secundaria_label', ''),
             'preview': preview,
             'score_tese': thesis['score'],
-            'fundamentos': ', '.join(thesis['fundamentos'][:5]),
+            'fundamentos': ', '.join(thesis['fundamentos'][:6]),
         })
         if len(blocks) >= max_blocks:
             break

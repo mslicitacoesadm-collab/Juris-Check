@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -115,21 +114,10 @@ def fetch_candidates(db_files: Iterable[Path], query_text: str, thesis_key: str 
 
 def text_blob(record: Dict) -> str:
     parts = [
-        record.get('tema'),
-        record.get('subtema'),
-        record.get('resumo'),
-        record.get('excerto'),
-        record.get('tags'),
-        record.get('colegiado'),
-        record.get('tribunal'),
-        record.get('tese_central'),
-        record.get('ementa_resumida'),
-        record.get('trecho_chave'),
-        ' '.join(record.get('fundamentos_legais') or []),
-        ' '.join(record.get('palavras_chave') or []),
-        ' '.join(record.get('aplicavel_em') or []),
-        record.get('resumo_uso_pratico'),
-        record.get('texto_indexavel'),
+        record.get('tema'), record.get('subtema'), record.get('resumo'), record.get('excerto'), record.get('tags'),
+        record.get('colegiado'), record.get('tribunal'), record.get('tese_central'), record.get('ementa_resumida'),
+        record.get('trecho_chave'), ' '.join(record.get('fundamentos_legais') or []), ' '.join(record.get('palavras_chave') or []),
+        ' '.join(record.get('aplicavel_em') or []), record.get('resumo_uso_pratico'), record.get('texto_indexavel'),
     ]
     return ' '.join(str(x or '') for x in parts)
 
@@ -241,6 +229,19 @@ def search_candidates(db_files: Iterable[Path], query_text: str, thesis_key: str
     return scored[:top_k]
 
 
+def classify_problem(exact: Dict | None, score: float, alternatives: List[Dict], citation: Dict) -> tuple[str, str]:
+    if exact and score >= 0.34:
+        return 'citação existente e aderente', 'A referência existe na base e conversa adequadamente com a tese do trecho analisado.'
+    if exact and score < 0.34:
+        return 'citação existente com tese desalinhada', 'O número existe, mas o contexto do precedente é fraco ou inadequado para a tese em que foi usado.'
+    if alternatives:
+        alt = alternatives[0]
+        return 'número não localizado com precedente substituto disponível', f"A referência citada não foi confirmada, mas foi localizado precedente melhor aderente: {alt.get('citacao_curta','')}."
+    if citation.get('numero') and citation.get('ano'):
+        return 'número não confirmado na base', 'O número informado não foi encontrado e não houve substituto com confiança suficiente dentro dos filtros atuais.'
+    return 'referência imprecisa', 'A citação está incompleta ou pouco específica para validação segura.'
+
+
 def validate_reference(db_files: Iterable[Path], citation: Dict, top_k: int = 3) -> Dict:
     thesis = detect_thesis(citation.get('contexto', ''))
     exact = exact_lookup(db_files, citation.get('kind', ''), citation.get('numero', ''), citation.get('ano') or None)
@@ -249,7 +250,9 @@ def validate_reference(db_files: Iterable[Path], citation: Dict, top_k: int = 3)
         'tese': thesis.get('label', 'Tese geral'), 'status': 'nao_localizada', 'status_label': 'Não localizada na base',
         'matched_record': None, 'alternativas': [], 'correcao_sugerida': None, 'substituicao_textual': None,
         'score_contexto': 0.0, 'grau_confianca': 'Não validada', 'paragrafo_reescrito': '', 'motivo_match': '',
+        'problema_classificado': '', 'nota_auditoria': '',
     }
+    score = 0.0
     if exact:
         score = score_record(exact, citation.get('contexto', '') or citation.get('raw', ''), thesis.get('chave'))
         exact['compat_score'] = score
@@ -269,8 +272,9 @@ def validate_reference(db_files: Iterable[Path], citation: Dict, top_k: int = 3)
             result['grau_confianca'] = 'Baixa confiança'
     kinds = {citation.get('kind')} if citation.get('kind') else None
     alts = search_candidates(db_files, citation.get('contexto', '') or citation.get('raw', ''), thesis.get('chave'), kinds=kinds, top_k=top_k)
+    filtered = [a for a in alts if (not exact) or (a.get('numero'), a.get('ano')) != (exact.get('numero'), exact.get('ano'))]
     if result['status'] != 'valida_compatível':
-        result['alternativas'] = [a for a in alts if (not exact) or a.get('numero') != exact.get('numero')][:top_k]
+        result['alternativas'] = filtered[:top_k]
         if result['alternativas']:
             best = result['alternativas'][0]
             result['correcao_sugerida'] = best
@@ -281,4 +285,7 @@ def validate_reference(db_files: Iterable[Path], citation: Dict, top_k: int = 3)
             result['substituicao_textual'] = build_short_reference(best)
             result['paragrafo_reescrito'] = suggest_rewrite(citation.get('contexto', ''), best, thesis.get('label', 'Tese geral'))
             result['motivo_match'] = best.get('motivo_match', '')
+    problema, nota = classify_problem(exact, score, result['alternativas'], citation)
+    result['problema_classificado'] = problema
+    result['nota_auditoria'] = nota
     return result
