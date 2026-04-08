@@ -3,9 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Dict, Iterable, List
 
-from modules.base_db import detect_schema, exact_lookup, open_db, row_to_normalized_dict
-from modules.citation_extractor import THESIS_EXPANSIONS, THESIS_KEYWORDS, detect_thesis, short_quote_from_text, tokenize
-
+from modules.base_db import detect_schema, layered_reference_lookup, open_db, row_to_normalized_dict
+from modules.citation_extractor import THESIS_EXPANSIONS, THESIS_KEYWORDS, detect_thesis, normalize_colegiado, parse_manual_query, short_quote_from_text, tokenize
 
 KIND_LABELS = {'acordao': 'Acórdão', 'jurisprudencia': 'Jurisprudência', 'sumula': 'Súmula'}
 STOPWORDS = {'para','com','sem','dos','das','que','por','uma','não','nao','nos','nas','como','mais','menos','entre','pela','pelo','sobre','deve','deverá','devera','aos','das','sua','seu','este','esta','esse','essa','ser','foi','art','lei'}
@@ -40,25 +39,12 @@ def _safe_float(value, default=0.0):
         return default
 
 
-def compatibility_label(score: float) -> str:
-    if score >= 0.65:
-        return 'Muito forte'
-    if score >= 0.48:
-        return 'Forte'
-    if score >= 0.34:
-        return 'Boa'
-    if score >= 0.22:
-        return 'Moderada'
-    return 'Baixa'
-
-
 def fetch_candidates(db_files: Iterable[Path], query_text: str, thesis_key: str | None = None, kinds: set[str] | None = None, limit_each: int = 24) -> List[Dict]:
     terms = semantic_terms(query_text, thesis_key)
     results: List[Dict] = []
     has_intelligent = any(detect_schema(str(db)).get('is_intelligent') for db in db_files)
     for db in db_files:
-        schema = detect_schema(str(db))
-        kind = schema.get('kind')
+        schema = detect_schema(str(db)); kind = schema.get('kind')
         if has_intelligent and not schema.get('is_intelligent'):
             continue
         if kinds and kind not in kinds and not schema.get('is_intelligent'):
@@ -70,39 +56,27 @@ def fetch_candidates(db_files: Iterable[Path], query_text: str, thesis_key: str 
             conn = open_db(db)
             try:
                 if schema.get('is_intelligent'):
-                    params = []
-                    where = []
+                    params = []; where = []
                     if kinds:
-                        placeholders = ','.join(['?'] * len(kinds))
-                        where.append(f"tipo IN ({placeholders})")
-                        params.extend(sorted(kinds))
-                    if thesis_key:
+                        placeholders = ','.join(['?'] * len(kinds)); where.append(f"tipo IN ({placeholders})"); params.extend(sorted(kinds))
+                    if thesis_key and thesis_key != 'geral':
                         where.append('(tema_principal = ? OR texto_indexavel LIKE ? OR tese_central LIKE ?)')
                         thesis_text = thesis_key.replace('_', ' ')
                         params.extend([thesis_key, f'%{thesis_text}%', f'%{thesis_text}%'])
                     if terms:
                         text_cond = ' OR '.join(['texto_indexavel LIKE ?' for _ in terms[:8]])
-                        where.append(f'({text_cond})')
-                        params.extend([f'%{t}%' for t in terms[:8]])
+                        where.append(f'({text_cond})'); params.extend([f'%{t}%' for t in terms[:8]])
                     where_sql = ('WHERE ' + ' AND '.join(where)) if where else ''
                     sql = f"SELECT * FROM precedentes_inteligentes {where_sql} ORDER BY score_confianca_interno DESC, grau_utilidade DESC LIMIT {limit_each}"
                     rows = conn.execute(sql, params).fetchall()
                     if not rows and schema.get('fts_table') and terms:
                         fts = _fts_query(terms)
                         if fts:
-                            fts_sql = """SELECT p.*
-                                         FROM precedentes_fts f
-                                         JOIN precedentes_inteligentes p ON p.id = f.rowid
-                                         WHERE precedentes_fts MATCH ?
-                                         ORDER BY p.score_confianca_interno DESC, p.grau_utilidade DESC
-                                         LIMIT ?"""
+                            fts_sql = """SELECT p.* FROM precedentes_fts f JOIN precedentes_inteligentes p ON p.id = f.rowid WHERE precedentes_fts MATCH ? ORDER BY p.score_confianca_interno DESC, p.grau_utilidade DESC LIMIT ?"""
                             rows = conn.execute(fts_sql, (fts, limit_each)).fetchall()
                     for row in rows:
-                        item = row_to_normalized_dict(row, schema)
-                        item['_source_db'] = db.name
-                        results.append(item)
+                        item = row_to_normalized_dict(row, schema); item['_source_db'] = db.name; results.append(item)
                     continue
-
                 cols = schema.get('columns', set())
                 text_cols = [c for c in ['tema', 'assunto', 'subtema', 'sumario', 'ementa_match', 'texto_match', 'decisao', 'acordao_texto', 'enunciado', 'excerto', 'paragrafolc', 'indexadoresconsolidados', 'indexacao', 'referencialegal', 'tags', 'area'] if c in cols]
                 if not text_cols:
@@ -111,12 +85,10 @@ def fetch_candidates(db_files: Iterable[Path], query_text: str, thesis_key: str 
                 cond_terms = terms[:8] if terms else []
                 where = ' OR '.join([f"lower({sql_text}) LIKE ?" for _ in cond_terms]) or '1=1'
                 params = [f"%{t}%" for t in cond_terms]
-                sql = f"SELECT * FROM {table} WHERE {where} LIMIT {limit_each}"
+                sql = f'SELECT * FROM {table} WHERE {where} LIMIT {limit_each}'
                 rows = conn.execute(sql, params).fetchall()
                 for row in rows:
-                    item = row_to_normalized_dict(row, schema)
-                    item['_source_db'] = db.name
-                    results.append(item)
+                    item = row_to_normalized_dict(row, schema); item['_source_db'] = db.name; results.append(item)
             finally:
                 conn.close()
         except Exception:
@@ -125,27 +97,19 @@ def fetch_candidates(db_files: Iterable[Path], query_text: str, thesis_key: str 
 
 
 def text_blob(record: Dict) -> str:
-    parts = [
-        record.get('tema'), record.get('subtema'), record.get('resumo'), record.get('excerto'), record.get('tags'),
-        record.get('colegiado'), record.get('tribunal'), record.get('tese_central'), record.get('ementa_resumida'),
-        record.get('trecho_chave'), ' '.join(record.get('fundamentos_legais') or []), ' '.join(record.get('palavras_chave') or []),
-        ' '.join(record.get('aplicavel_em') or []), record.get('resumo_uso_pratico'), record.get('texto_indexavel'),
-    ]
+    parts = [record.get('tema'), record.get('subtema'), record.get('resumo'), record.get('excerto'), record.get('tags'), record.get('colegiado'), record.get('tribunal'), record.get('tese_central'), record.get('ementa_resumida'), record.get('trecho_chave'), ' '.join(record.get('fundamentos_legais') or []), ' '.join(record.get('palavras_chave') or []), ' '.join(record.get('aplicavel_em') or []), record.get('resumo_uso_pratico'), record.get('texto_indexavel')]
     return ' '.join(str(x or '') for x in parts)
 
 
 def overlap_score(query_terms: List[str], record_terms: List[str]) -> float:
     if not query_terms or not record_terms:
         return 0.0
-    q = set(query_terms)
-    r = set(record_terms)
-    inter = len(q & r)
-    return inter / max(len(q), 1)
+    q = set(query_terms); r = set(record_terms)
+    return len(q & r) / max(len(q), 1)
 
 
 def phrase_bonus(query_text: str, record: Dict, thesis_key: str | None) -> float:
-    lower_blob = text_blob(record).lower()
-    bonus = 0.0
+    lower_blob = text_blob(record).lower(); bonus = 0.0
     for phrase in (THESIS_KEYWORDS.get(thesis_key, []) if thesis_key else []):
         if phrase in lower_blob:
             bonus += 0.055
@@ -157,50 +121,64 @@ def phrase_bonus(query_text: str, record: Dict, thesis_key: str | None) -> float
     return min(bonus, 0.24)
 
 
-def score_record(record: Dict, query_text: str, thesis_key: str | None = None) -> float:
+def score_record(record: Dict, query_text: str, thesis_key: str | None = None, parsed_query: Dict | None = None) -> float:
     blob = text_blob(record)
     query_terms = semantic_terms(query_text, thesis_key)
     record_terms = [t for t in tokenize(blob) if t not in STOPWORDS]
     raw_query = (query_text or '').lower()
-
-    score_numero = 0.18 if str(record.get('numero') or '').lower() in raw_query and str(record.get('numero') or '').strip() else 0.0
-    score_ano = 0.07 if str(record.get('ano') or '').lower() in raw_query and str(record.get('ano') or '').strip() else 0.0
-    score_colegiado = 0.05 if str(record.get('colegiado') or '').lower() in raw_query and str(record.get('colegiado') or '').strip() else 0.0
+    score_numero = 0.0; score_ano = 0.0; score_colegiado = 0.0
+    reference_penalty = 0.0
+    if parsed_query:
+        if parsed_query.get('numero') and record.get('numero_norm') == parsed_query.get('numero'):
+            score_numero = 0.46
+        elif str(record.get('numero') or '').lower() in raw_query and str(record.get('numero') or '').strip():
+            score_numero = 0.18
+        elif parsed_query.get('numero'):
+            reference_penalty -= 0.30
+        if parsed_query.get('ano') and str(record.get('ano_norm') or '') == str(parsed_query.get('ano') or ''):
+            score_ano = 0.14
+        elif str(record.get('ano') or '').lower() in raw_query and str(record.get('ano') or '').strip():
+            score_ano = 0.07
+        elif parsed_query.get('ano'):
+            reference_penalty -= 0.08
+        if parsed_query.get('colegiado_norm') and record.get('colegiado_norm') == parsed_query.get('colegiado_norm'):
+            score_colegiado = 0.1
+        elif parsed_query.get('colegiado_norm') and record.get('colegiado_norm'):
+            reference_penalty -= 0.04
+    else:
+        score_numero = 0.18 if str(record.get('numero') or '').lower() in raw_query and str(record.get('numero') or '').strip() else 0.0
+        score_ano = 0.07 if str(record.get('ano') or '').lower() in raw_query and str(record.get('ano') or '').strip() else 0.0
+        score_colegiado = 0.05 if str(record.get('colegiado') or '').lower() in raw_query and str(record.get('colegiado') or '').strip() else 0.0
+        reference_penalty = 0.0
     score_textual = overlap_score(query_terms, record_terms)
     score_tese = phrase_bonus(query_text, record, thesis_key)
     score_utilidade = min(_safe_float(record.get('grau_utilidade')) * 0.12, 0.12)
     score_confianca = min(_safe_float(record.get('score_confianca_interno')) * 0.08, 0.08)
     score_uso = 0.04 if record.get('aplicavel_em') else 0.0
-
-    base = score_textual + score_numero + score_ano + score_colegiado + score_tese + score_utilidade + score_confianca + score_uso
+    base = score_textual + score_numero + score_ano + score_colegiado + score_tese + score_utilidade + score_confianca + score_uso + reference_penalty
     if len(record_terms) > 120:
         base += 0.015
     return min(base, 0.99)
 
 
 def build_short_reference(record: Dict) -> str:
-    tribunal = record.get('tribunal') or 'TCM/BA'
+    tribunal = record.get('tribunal') or 'TCU'
     if record.get('tipo') == 'Súmula':
         return f"{tribunal}, Súmula nº {record.get('numero')}"
-    return f"{tribunal}, {record.get('tipo')} nº {record.get('numero')}/{record.get('ano')} - {record.get('colegiado')}"
+    comp = f" - {record.get('colegiado')}" if record.get('colegiado') else ''
+    return f"{tribunal}, {record.get('tipo')} nº {record.get('numero')}/{record.get('ano')}{comp}"
 
 
 def explain_match(record: Dict, thesis_label: str, query_text: str, thesis_key: str | None) -> str:
-    motivos = []
-    blob = text_blob(record).lower()
+    motivos = []; blob = text_blob(record).lower()
     if thesis_key:
         for phrase in THESIS_KEYWORDS.get(thesis_key, [])[:5]:
-            if phrase in blob:
-                motivos.append(phrase)
+            if phrase in blob: motivos.append(phrase)
         for phrase in THESIS_EXPANSIONS.get(thesis_key, [])[:3]:
-            if phrase in blob:
-                motivos.append(phrase)
-    if record.get('resumo_uso_pratico'):
-        motivos.append(record['resumo_uso_pratico'])
-    if not motivos and record.get('tese_central'):
-        motivos = [record['tese_central']]
-    if not motivos:
-        motivos = [thesis_label.lower()]
+            if phrase in blob: motivos.append(phrase)
+    if record.get('resumo_uso_pratico'): motivos.append(record['resumo_uso_pratico'])
+    if not motivos and record.get('tese_central'): motivos = [record['tese_central']]
+    if not motivos: motivos = [thesis_label.lower()]
     motivos = '; '.join(list(dict.fromkeys(motivos))[:2])
     return f"Aderência maior por tratar de {motivos} e dialogar com o contexto da tese analisada."
 
@@ -209,109 +187,97 @@ def suggest_rewrite(context: str, record: Dict, thesis_label: str) -> str:
     short = short_quote_from_text(record.get('trecho_chave') or record.get('excerto') or record.get('resumo') or '', 260)
     ref = build_short_reference(record)
     thesis = (thesis_label or 'a tese discutida').lower()
-    base = (
-        f"No ponto referente a {thesis}, a fundamentação pode ser aprimorada com a invocação de {ref}, "
-        f"pois esse precedente indica, em síntese, que {short.lower()}"
-    )
+    base = f"No ponto referente a {thesis}, a fundamentação pode ser aprimorada com a invocação de {ref}, pois esse precedente indica, em síntese, que {short.lower()}"
     if record.get('resumo_uso_pratico'):
         base += f" {record['resumo_uso_pratico']}"
-    if not base.endswith('.'):
-        base += '.'
+    if not base.endswith('.'): base += '.'
     return base
 
 
-def build_argument_snippet(record: Dict, thesis_label: str = 'a tese discutida') -> str:
-    ref = build_short_reference(record)
-    fundamento = short_quote_from_text(record.get('trecho_chave') or record.get('resumo_uso_pratico') or record.get('resumo') or record.get('excerto') or '', 260)
-    tese = (thesis_label or 'a tese discutida').lower()
-    texto = f"Como reforço para {tese}, recomenda-se a utilização de {ref}, cuja razão de decidir aponta que {fundamento.lower()}"
-    if not texto.endswith('.'):
-        texto += '.'
-    return texto
+def classify_lookup_layer(layer: str) -> str:
+    return {
+        'exata': 'Referência exata localizada',
+        'numero_exato': 'Número localizado com normalização',
+        'nao_encontrado': 'Referência exata não localizada',
+        'sem_numero': 'Consulta sem número estruturado',
+    }.get(layer, 'Resultado híbrido')
 
 
 def search_candidates(db_files: Iterable[Path], query_text: str, thesis_key: str | None = None, kinds: set[str] | None = None, top_k: int = 5) -> List[Dict]:
-    raw = fetch_candidates(db_files, query_text, thesis_key, kinds=kinds, limit_each=max(30, top_k * 12))
+    parsed = parse_manual_query(query_text)
+    raw: List[Dict] = []
+    if parsed.get('reference_mode') and parsed.get('numero'):
+        layered = layered_reference_lookup(db_files, parsed.get('kind', 'acordao'), parsed.get('numero', ''), parsed.get('ano') or None, parsed.get('colegiado') or None, limit=max(top_k * 2, 6))
+        for rec in layered['matches']:
+            rec['lookup_layer_label'] = classify_lookup_layer(layered['layer'])
+            raw.append(rec)
+    residual = parsed.get('residual_text') or query_text
+    raw.extend(fetch_candidates(db_files, residual, thesis_key or parsed.get('thesis_key'), kinds=kinds, limit_each=max(30, top_k * 12)))
     seen = set(); scored = []
     thesis = detect_thesis(query_text)
     for rec in raw:
-        uniq = (rec.get('tipo'), rec.get('numero'), rec.get('ano'), rec.get('colegiado'))
+        uniq = rec.get('reference_key')
         if uniq in seen:
             continue
         seen.add(uniq)
-        score = score_record(rec, query_text, thesis_key)
-        if score < 0.16:
+        score = score_record(rec, query_text, thesis_key or parsed.get('thesis_key'), parsed_query=parsed)
+        if score < 0.12:
             continue
         rec['compat_score'] = score
-        rec['compat_label'] = compatibility_label(score)
         rec['citacao_curta'] = build_short_reference(rec)
         rec['fundamento_curto'] = short_quote_from_text(rec.get('trecho_chave') or rec.get('resumo') or rec.get('excerto') or '', 230)
-        rec['motivo_match'] = explain_match(rec, thesis.get('label', 'tese geral'), query_text, thesis_key)
-        rec['texto_pronto'] = build_argument_snippet(rec, thesis.get('label', 'Tese geral'))
+        rec['motivo_match'] = explain_match(rec, thesis.get('label', 'tese geral'), query_text, thesis_key or parsed.get('thesis_key'))
         scored.append(rec)
-    scored.sort(key=lambda x: (x['compat_score'], _safe_float(x.get('score_confianca_interno')), _safe_float(x.get('grau_utilidade'))), reverse=True)
+    scored.sort(key=lambda x: (x['compat_score'], x.get('lookup_score', 0), _safe_float(x.get('score_confianca_interno')), _safe_float(x.get('grau_utilidade'))), reverse=True)
     return scored[:top_k]
 
 
-def classify_problem(exact: Dict | None, score: float, alternatives: List[Dict], citation: Dict) -> tuple[str, str]:
-    if exact and score >= 0.34:
-        return 'citação existente e aderente', 'A referência existe na base e conversa adequadamente com a tese do trecho analisado.'
-    if exact and score < 0.34:
-        return 'citação existente com tese desalinhada', 'O número existe, mas o contexto do precedente é fraco ou inadequado para a tese em que foi usado.'
-    if alternatives:
-        alt = alternatives[0]
-        return 'número não localizado com precedente substituto disponível', f"A referência citada não foi confirmada, mas foi localizado precedente melhor aderente: {alt.get('citacao_curta','')}."
-    if citation.get('numero') and citation.get('ano'):
-        return 'número não confirmado na base', 'O número informado não foi encontrado e não houve substituto com confiança suficiente dentro dos filtros atuais.'
-    return 'referência imprecisa', 'A citação está incompleta ou pouco específica para validação segura.'
+def search_manual_precedents(db_files: Iterable[Path], query_text: str, kinds: set[str] | None = None, top_k: int = 8) -> Dict:
+    parsed = parse_manual_query(query_text)
+    requested_kind = parsed.get('kind', 'acordao')
+    if kinds and requested_kind not in kinds and parsed.get('reference_mode'):
+        parsed['reference_mode'] = False
+    layered = {'layer': 'sem_numero', 'matches': []}
+    if parsed.get('reference_mode'):
+        layered = layered_reference_lookup(db_files, requested_kind, parsed.get('numero', ''), parsed.get('ano') or None, parsed.get('colegiado') or None, limit=max(top_k, 8))
+    thesis_key = parsed.get('thesis_key') if parsed.get('thesis_key') != 'geral' else None
+    results = search_candidates(db_files, query_text, thesis_key=thesis_key, kinds=kinds, top_k=top_k)
+    return {
+        'query': parsed,
+        'lookup_layer': layered.get('layer'),
+        'lookup_layer_label': classify_lookup_layer(layered.get('layer')),
+        'matches': results,
+        'exact_matches': layered.get('matches', []),
+        'search_mode': 'referencia_especifica' if parsed.get('reference_mode') else 'busca_por_tese',
+    }
 
 
 def validate_reference(db_files: Iterable[Path], citation: Dict, top_k: int = 3) -> Dict:
     thesis = detect_thesis(citation.get('contexto', ''))
-    exact = exact_lookup(db_files, citation.get('kind', ''), citation.get('numero', ''), citation.get('ano') or None)
+    lookup = layered_reference_lookup(db_files, citation.get('kind', ''), citation.get('numero', ''), citation.get('ano') or None, citation.get('colegiado') or None, limit=3)
+    exact = lookup['matches'][0] if lookup['matches'] else None
     result = {
-        'kind': citation.get('kind'), 'raw': citation.get('raw', ''), 'contexto': citation.get('contexto', ''), 'linha': citation.get('linha'),
-        'tese': thesis.get('label', 'Tese geral'), 'status': 'nao_localizada', 'status_label': 'Não localizada na base',
-        'matched_record': None, 'alternativas': [], 'correcao_sugerida': None, 'substituicao_textual': None,
-        'score_contexto': 0.0, 'grau_confianca': 'Não validada', 'paragrafo_reescrito': '', 'motivo_match': '',
-        'problema_classificado': '', 'nota_auditoria': '',
+        'kind': citation.get('kind'), 'raw': citation.get('raw', ''), 'contexto': citation.get('contexto', ''), 'linha': citation.get('linha'), 'tese': thesis.get('label', 'Tese geral'),
+        'status': 'nao_localizada', 'status_label': 'Não localizada na base', 'matched_record': None, 'alternativas': [], 'correcao_sugerida': None, 'substituicao_textual': None,
+        'score_contexto': 0.0, 'grau_confianca': 'Não validada', 'paragrafo_reescrito': '', 'motivo_match': '', 'tipo_erro': 'número não localizado', 'camada_busca': classify_lookup_layer(lookup.get('layer')),
     }
-    score = 0.0
     if exact:
-        score = score_record(exact, citation.get('contexto', '') or citation.get('raw', ''), thesis.get('chave'))
-        exact['compat_score'] = score
-        exact['compat_label'] = compatibility_label(score)
-        exact['citacao_curta'] = build_short_reference(exact)
-        exact['motivo_match'] = explain_match(exact, thesis.get('label', 'tese geral'), citation.get('contexto', '') or citation.get('raw', ''), thesis.get('chave'))
-        exact['texto_pronto'] = build_argument_snippet(exact, thesis.get('label', 'Tese geral'))
-        result['matched_record'] = exact
-        result['score_contexto'] = score
-        result['motivo_match'] = exact['motivo_match']
-        if score >= 0.34:
-            result['status'] = 'valida_compatível'
-            result['status_label'] = 'Válida e compatível com a tese'
-            result['grau_confianca'] = 'Alta confiança' if score >= 0.48 else 'Média confiança'
-            result['paragrafo_reescrito'] = citation.get('contexto', '')
+        score = score_record(exact, citation.get('contexto', '') or citation.get('raw', ''), thesis.get('chave'), parsed_query={'numero': citation.get('numero'), 'ano': citation.get('ano'), 'colegiado_norm': normalize_colegiado(citation.get('colegiado') or '')})
+        exact['compat_score'] = score; exact['citacao_curta'] = build_short_reference(exact); exact['motivo_match'] = explain_match(exact, thesis.get('label', 'tese geral'), citation.get('contexto', '') or citation.get('raw', ''), thesis.get('chave'))
+        result['matched_record'] = exact; result['score_contexto'] = score; result['motivo_match'] = exact['motivo_match']
+        if score >= 0.42:
+            result['status'] = 'valida_compatível'; result['status_label'] = 'Válida e compatível com a tese'; result['grau_confianca'] = 'Alta confiança' if score >= 0.56 else 'Média confiança'; result['paragrafo_reescrito'] = citation.get('contexto', ''); result['tipo_erro'] = 'sem erro relevante'
         else:
-            result['status'] = 'valida_pouco_compativel'
-            result['status_label'] = 'Número válido, mas fundamento fraco para a tese'
-            result['grau_confianca'] = 'Baixa confiança'
+            result['status'] = 'valida_pouco_compativel'; result['status_label'] = 'Número válido, mas fundamento fraco para a tese'; result['grau_confianca'] = 'Baixa confiança'; result['tipo_erro'] = 'citação existente com contexto fraco'
     kinds = {citation.get('kind')} if citation.get('kind') else None
     alts = search_candidates(db_files, citation.get('contexto', '') or citation.get('raw', ''), thesis.get('chave'), kinds=kinds, top_k=top_k)
-    filtered = [a for a in alts if (not exact) or (a.get('numero'), a.get('ano')) != (exact.get('numero'), exact.get('ano'))]
     if result['status'] != 'valida_compatível':
-        result['alternativas'] = filtered[:top_k]
+        result['alternativas'] = [a for a in alts if (not exact) or a.get('reference_key') != exact.get('reference_key')][:top_k]
         if result['alternativas']:
-            best = result['alternativas'][0]
-            result['correcao_sugerida'] = best
+            best = result['alternativas'][0]; result['correcao_sugerida'] = best
             if result['status'] == 'nao_localizada':
-                result['status'] = 'divergente'
-                result['status_label'] = 'Citação divergente ou inadequada'
-                result['grau_confianca'] = 'Baixa confiança'
+                result['status'] = 'divergente'; result['status_label'] = 'Citação divergente ou inadequada'; result['grau_confianca'] = 'Baixa confiança'; result['tipo_erro'] = 'número inexistente ou inadequado para a tese'
             result['substituicao_textual'] = build_short_reference(best)
             result['paragrafo_reescrito'] = suggest_rewrite(citation.get('contexto', ''), best, thesis.get('label', 'Tese geral'))
             result['motivo_match'] = best.get('motivo_match', '')
-    problema, nota = classify_problem(exact, score, result['alternativas'], citation)
-    result['problema_classificado'] = problema
-    result['nota_auditoria'] = nota
     return result
