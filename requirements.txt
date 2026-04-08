@@ -3,4 +3,3 @@ pandas
 python-docx
 reportlab
 pdfplumber
-pypdf
