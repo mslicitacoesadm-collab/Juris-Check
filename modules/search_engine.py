@@ -40,6 +40,18 @@ def _safe_float(value, default=0.0):
         return default
 
 
+def compatibility_label(score: float) -> str:
+    if score >= 0.65:
+        return 'Muito forte'
+    if score >= 0.48:
+        return 'Forte'
+    if score >= 0.34:
+        return 'Boa'
+    if score >= 0.22:
+        return 'Moderada'
+    return 'Baixa'
+
+
 def fetch_candidates(db_files: Iterable[Path], query_text: str, thesis_key: str | None = None, kinds: set[str] | None = None, limit_each: int = 24) -> List[Dict]:
     terms = semantic_terms(query_text, thesis_key)
     results: List[Dict] = []
@@ -208,6 +220,16 @@ def suggest_rewrite(context: str, record: Dict, thesis_label: str) -> str:
     return base
 
 
+def build_argument_snippet(record: Dict, thesis_label: str = 'a tese discutida') -> str:
+    ref = build_short_reference(record)
+    fundamento = short_quote_from_text(record.get('trecho_chave') or record.get('resumo_uso_pratico') or record.get('resumo') or record.get('excerto') or '', 260)
+    tese = (thesis_label or 'a tese discutida').lower()
+    texto = f"Como reforço para {tese}, recomenda-se a utilização de {ref}, cuja razão de decidir aponta que {fundamento.lower()}"
+    if not texto.endswith('.'):
+        texto += '.'
+    return texto
+
+
 def search_candidates(db_files: Iterable[Path], query_text: str, thesis_key: str | None = None, kinds: set[str] | None = None, top_k: int = 5) -> List[Dict]:
     raw = fetch_candidates(db_files, query_text, thesis_key, kinds=kinds, limit_each=max(30, top_k * 12))
     seen = set(); scored = []
@@ -221,9 +243,11 @@ def search_candidates(db_files: Iterable[Path], query_text: str, thesis_key: str
         if score < 0.16:
             continue
         rec['compat_score'] = score
+        rec['compat_label'] = compatibility_label(score)
         rec['citacao_curta'] = build_short_reference(rec)
         rec['fundamento_curto'] = short_quote_from_text(rec.get('trecho_chave') or rec.get('resumo') or rec.get('excerto') or '', 230)
         rec['motivo_match'] = explain_match(rec, thesis.get('label', 'tese geral'), query_text, thesis_key)
+        rec['texto_pronto'] = build_argument_snippet(rec, thesis.get('label', 'Tese geral'))
         scored.append(rec)
     scored.sort(key=lambda x: (x['compat_score'], _safe_float(x.get('score_confianca_interno')), _safe_float(x.get('grau_utilidade'))), reverse=True)
     return scored[:top_k]
@@ -256,8 +280,10 @@ def validate_reference(db_files: Iterable[Path], citation: Dict, top_k: int = 3)
     if exact:
         score = score_record(exact, citation.get('contexto', '') or citation.get('raw', ''), thesis.get('chave'))
         exact['compat_score'] = score
+        exact['compat_label'] = compatibility_label(score)
         exact['citacao_curta'] = build_short_reference(exact)
         exact['motivo_match'] = explain_match(exact, thesis.get('label', 'tese geral'), citation.get('contexto', '') or citation.get('raw', ''), thesis.get('chave'))
+        exact['texto_pronto'] = build_argument_snippet(exact, thesis.get('label', 'Tese geral'))
         result['matched_record'] = exact
         result['score_contexto'] = score
         result['motivo_match'] = exact['motivo_match']
