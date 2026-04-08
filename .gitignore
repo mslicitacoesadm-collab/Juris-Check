@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.env
+.venv/
+exports/telemetry/events.jsonl
+exports/telemetry/summary.json
+data/base/*.db
+!data/base/.gitkeep
+base_inteligente_atlas/*.db
+base_inteligente_atlas/*.part_*
