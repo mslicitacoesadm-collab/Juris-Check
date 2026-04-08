@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -8,7 +9,7 @@ from modules.citation_extractor import THESIS_EXPANSIONS, THESIS_KEYWORDS, detec
 
 
 KIND_LABELS = {'acordao': 'Acórdão', 'jurisprudencia': 'Jurisprudência', 'sumula': 'Súmula'}
-STOPWORDS = {'para','com','sem','dos','das','que','por','uma','não','nao','nos','nas','como','mais','menos','entre','pela','pelo','sobre','deve','deverá','devera','aos','das','sua','seu','este','esta','esse','essa','ser','foi'}
+STOPWORDS = {'para','com','sem','dos','das','que','por','uma','não','nao','nos','nas','como','mais','menos','entre','pela','pelo','sobre','deve','deverá','devera','aos','das','sua','seu','este','esta','esse','essa','ser','foi','art','lei'}
 
 
 def semantic_terms(query_text: str, thesis_key: str | None) -> List[str]:
@@ -16,37 +17,89 @@ def semantic_terms(query_text: str, thesis_key: str | None) -> List[str]:
     if thesis_key and thesis_key in THESIS_KEYWORDS:
         for phrase in THESIS_KEYWORDS[thesis_key] + THESIS_EXPANSIONS.get(thesis_key, []):
             terms.extend(tokenize(phrase))
-    # preserve order without duplicates
     seen = set(); ordered = []
     for t in terms:
         if t not in seen:
             seen.add(t)
             ordered.append(t)
-    return ordered[:40]
+    return ordered[:48]
+
+
+def _fts_query(terms: List[str]) -> str:
+    clean = []
+    for t in terms[:8]:
+        t = ''.join(ch for ch in t if ch.isalnum() or ch in {'_', '-'})
+        if t:
+            clean.append(f'"{t}"')
+    return ' OR '.join(clean)
+
+
+def _safe_float(value, default=0.0):
+    try:
+        return float(value)
+    except Exception:
+        return default
 
 
 def fetch_candidates(db_files: Iterable[Path], query_text: str, thesis_key: str | None = None, kinds: set[str] | None = None, limit_each: int = 24) -> List[Dict]:
     terms = semantic_terms(query_text, thesis_key)
     results: List[Dict] = []
+    has_intelligent = any(detect_schema(str(db)).get('is_intelligent') for db in db_files)
     for db in db_files:
         schema = detect_schema(str(db))
         kind = schema.get('kind')
-        if kinds and kind not in kinds:
+        if has_intelligent and not schema.get('is_intelligent'):
+            continue
+        if kinds and kind not in kinds and not schema.get('is_intelligent'):
             continue
         table = schema.get('table')
         if not table:
             continue
-        cols = schema.get('columns', set())
-        text_cols = [c for c in ['tema', 'assunto', 'subtema', 'sumario', 'ementa_match', 'texto_match', 'decisao', 'acordao_texto', 'enunciado', 'excerto', 'paragrafolc', 'indexadoresconsolidados', 'indexacao', 'referencialegal', 'tags', 'area'] if c in cols]
-        if not text_cols:
-            continue
-        sql_text = " || ' ' || ".join([f"COALESCE(CAST({c} AS TEXT),'')" for c in text_cols])
-        cond_terms = terms[:8] if terms else []
-        where = ' OR '.join([f"lower({sql_text}) LIKE ?" for _ in cond_terms]) or '1=1'
-        params = [f"%{t}%" for t in cond_terms]
         try:
             conn = open_db(db)
             try:
+                if schema.get('is_intelligent'):
+                    params = []
+                    where = []
+                    if kinds:
+                        placeholders = ','.join(['?'] * len(kinds))
+                        where.append(f"tipo IN ({placeholders})")
+                        params.extend(sorted(kinds))
+                    if thesis_key:
+                        where.append('(tema_principal = ? OR texto_indexavel LIKE ? OR tese_central LIKE ?)')
+                        thesis_text = thesis_key.replace('_', ' ')
+                        params.extend([thesis_key, f'%{thesis_text}%', f'%{thesis_text}%'])
+                    if terms:
+                        text_cond = ' OR '.join(['texto_indexavel LIKE ?' for _ in terms[:8]])
+                        where.append(f'({text_cond})')
+                        params.extend([f'%{t}%' for t in terms[:8]])
+                    where_sql = ('WHERE ' + ' AND '.join(where)) if where else ''
+                    sql = f"SELECT * FROM precedentes_inteligentes {where_sql} ORDER BY score_confianca_interno DESC, grau_utilidade DESC LIMIT {limit_each}"
+                    rows = conn.execute(sql, params).fetchall()
+                    if not rows and schema.get('fts_table') and terms:
+                        fts = _fts_query(terms)
+                        if fts:
+                            fts_sql = """SELECT p.*
+                                         FROM precedentes_fts f
+                                         JOIN precedentes_inteligentes p ON p.id = f.rowid
+                                         WHERE precedentes_fts MATCH ?
+                                         ORDER BY p.score_confianca_interno DESC, p.grau_utilidade DESC
+                                         LIMIT ?"""
+                            rows = conn.execute(fts_sql, (fts, limit_each)).fetchall()
+                    for row in rows:
+                        item = row_to_normalized_dict(row, schema)
+                        item['_source_db'] = db.name
+                        results.append(item)
+                    continue
+
+                cols = schema.get('columns', set())
+                text_cols = [c for c in ['tema', 'assunto', 'subtema', 'sumario', 'ementa_match', 'texto_match', 'decisao', 'acordao_texto', 'enunciado', 'excerto', 'paragrafolc', 'indexadoresconsolidados', 'indexacao', 'referencialegal', 'tags', 'area'] if c in cols]
+                if not text_cols:
+                    continue
+                sql_text = " || ' ' || ".join([f"COALESCE(CAST({c} AS TEXT),'')" for c in text_cols])
+                cond_terms = terms[:8] if terms else []
+                where = ' OR '.join([f"lower({sql_text}) LIKE ?" for _ in cond_terms]) or '1=1'
+                params = [f"%{t}%" for t in cond_terms]
                 sql = f"SELECT * FROM {table} WHERE {where} LIMIT {limit_each}"
                 rows = conn.execute(sql, params).fetchall()
                 for row in rows:
@@ -61,7 +114,24 @@ def fetch_candidates(db_files: Iterable[Path], query_text: str, thesis_key: str 
 
 
 def text_blob(record: Dict) -> str:
-    return ' '.join(str(record.get(k) or '') for k in ['tema', 'subtema', 'resumo', 'excerto', 'tags', 'colegiado'])
+    parts = [
+        record.get('tema'),
+        record.get('subtema'),
+        record.get('resumo'),
+        record.get('excerto'),
+        record.get('tags'),
+        record.get('colegiado'),
+        record.get('tribunal'),
+        record.get('tese_central'),
+        record.get('ementa_resumida'),
+        record.get('trecho_chave'),
+        ' '.join(record.get('fundamentos_legais') or []),
+        ' '.join(record.get('palavras_chave') or []),
+        ' '.join(record.get('aplicavel_em') or []),
+        record.get('resumo_uso_pratico'),
+        record.get('texto_indexavel'),
+    ]
+    return ' '.join(str(x or '') for x in parts)
 
 
 def overlap_score(query_terms: List[str], record_terms: List[str]) -> float:
@@ -91,24 +161,28 @@ def score_record(record: Dict, query_text: str, thesis_key: str | None = None) -
     blob = text_blob(record)
     query_terms = semantic_terms(query_text, thesis_key)
     record_terms = [t for t in tokenize(blob) if t not in STOPWORDS]
-    base = overlap_score(query_terms, record_terms)
     raw_query = (query_text or '').lower()
-    if str(record.get('numero') or '').lower() in raw_query and str(record.get('numero') or '').strip():
-        base += 0.18
-    if str(record.get('ano') or '').lower() in raw_query and str(record.get('ano') or '').strip():
-        base += 0.07
-    if str(record.get('colegiado') or '').lower() in raw_query and str(record.get('colegiado') or '').strip():
-        base += 0.05
-    base += phrase_bonus(query_text, record, thesis_key)
+
+    score_numero = 0.18 if str(record.get('numero') or '').lower() in raw_query and str(record.get('numero') or '').strip() else 0.0
+    score_ano = 0.07 if str(record.get('ano') or '').lower() in raw_query and str(record.get('ano') or '').strip() else 0.0
+    score_colegiado = 0.05 if str(record.get('colegiado') or '').lower() in raw_query and str(record.get('colegiado') or '').strip() else 0.0
+    score_textual = overlap_score(query_terms, record_terms)
+    score_tese = phrase_bonus(query_text, record, thesis_key)
+    score_utilidade = min(_safe_float(record.get('grau_utilidade')) * 0.12, 0.12)
+    score_confianca = min(_safe_float(record.get('score_confianca_interno')) * 0.08, 0.08)
+    score_uso = 0.04 if record.get('aplicavel_em') else 0.0
+
+    base = score_textual + score_numero + score_ano + score_colegiado + score_tese + score_utilidade + score_confianca + score_uso
     if len(record_terms) > 120:
         base += 0.015
     return min(base, 0.99)
 
 
 def build_short_reference(record: Dict) -> str:
+    tribunal = record.get('tribunal') or 'TCM/BA'
     if record.get('tipo') == 'Súmula':
-        return f"Súmula TCU nº {record.get('numero')}"
-    return f"TCU, {record.get('tipo')} nº {record.get('numero')}/{record.get('ano')} - {record.get('colegiado')}"
+        return f"{tribunal}, Súmula nº {record.get('numero')}"
+    return f"{tribunal}, {record.get('tipo')} nº {record.get('numero')}/{record.get('ano')} - {record.get('colegiado')}"
 
 
 def explain_match(record: Dict, thesis_label: str, query_text: str, thesis_key: str | None) -> str:
@@ -121,20 +195,26 @@ def explain_match(record: Dict, thesis_label: str, query_text: str, thesis_key: 
         for phrase in THESIS_EXPANSIONS.get(thesis_key, [])[:3]:
             if phrase in blob:
                 motivos.append(phrase)
+    if record.get('resumo_uso_pratico'):
+        motivos.append(record['resumo_uso_pratico'])
+    if not motivos and record.get('tese_central'):
+        motivos = [record['tese_central']]
     if not motivos:
         motivos = [thesis_label.lower()]
-    motivos = ', '.join(list(dict.fromkeys(motivos))[:4])
+    motivos = '; '.join(list(dict.fromkeys(motivos))[:2])
     return f"Aderência maior por tratar de {motivos} e dialogar com o contexto da tese analisada."
 
 
 def suggest_rewrite(context: str, record: Dict, thesis_label: str) -> str:
-    short = short_quote_from_text(record.get('excerto') or record.get('resumo') or '', 260)
+    short = short_quote_from_text(record.get('trecho_chave') or record.get('excerto') or record.get('resumo') or '', 260)
     ref = build_short_reference(record)
     thesis = (thesis_label or 'a tese discutida').lower()
     base = (
         f"No ponto referente a {thesis}, a fundamentação pode ser aprimorada com a invocação de {ref}, "
         f"pois esse precedente indica, em síntese, que {short.lower()}"
     )
+    if record.get('resumo_uso_pratico'):
+        base += f" {record['resumo_uso_pratico']}"
     if not base.endswith('.'):
         base += '.'
     return base
@@ -145,7 +225,7 @@ def search_candidates(db_files: Iterable[Path], query_text: str, thesis_key: str
     seen = set(); scored = []
     thesis = detect_thesis(query_text)
     for rec in raw:
-        uniq = (rec.get('tipo'), rec.get('numero'), rec.get('ano'))
+        uniq = (rec.get('tipo'), rec.get('numero'), rec.get('ano'), rec.get('colegiado'))
         if uniq in seen:
             continue
         seen.add(uniq)
@@ -154,10 +234,10 @@ def search_candidates(db_files: Iterable[Path], query_text: str, thesis_key: str
             continue
         rec['compat_score'] = score
         rec['citacao_curta'] = build_short_reference(rec)
-        rec['fundamento_curto'] = short_quote_from_text(rec.get('resumo') or rec.get('excerto') or '', 230)
+        rec['fundamento_curto'] = short_quote_from_text(rec.get('trecho_chave') or rec.get('resumo') or rec.get('excerto') or '', 230)
         rec['motivo_match'] = explain_match(rec, thesis.get('label', 'tese geral'), query_text, thesis_key)
         scored.append(rec)
-    scored.sort(key=lambda x: x['compat_score'], reverse=True)
+    scored.sort(key=lambda x: (x['compat_score'], _safe_float(x.get('score_confianca_interno')), _safe_float(x.get('grau_utilidade'))), reverse=True)
     return scored[:top_k]
 
 
