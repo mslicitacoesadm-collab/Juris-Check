@@ -1,28 +1,27 @@
-# DECIFRA Licitações — versão final pública
+# DECIFRA Licitações — versão final estratégica
 
-Sistema em Streamlit para auditoria de citações jurídicas em peças de licitação, com tela única, amostra gratuita, bloqueio premium e integração com Mercado Pago Checkout Pro.
+Sistema Streamlit em tela única para auditoria de peças jurídicas com camada comercial.
 
-## Como rodar
+## O que vem nesta versão
+- Modo público `pagamento` ou `livre`, controlado por senha administrativa.
+- Página principal única, sem excesso de telas.
+- Prévia da peça com blur quando o relatório está bloqueado.
+- Amostra gratuita limitada.
+- Mercado Pago Checkout Pro.
+- PIX/WhatsApp/código manual como fallback.
+- Exportação DOCX, PDF e CSV no modo liberado.
+- Sem base de dados incluída.
 
+## Como usar
+1. Coloque seus arquivos `.db` em `data/base/`.
+2. Configure os secrets no Streamlit Cloud com base em `.streamlit/secrets.toml.example`.
+3. Rode:
 ```bash
 pip install -r requirements.txt
 streamlit run app.py
 ```
 
-## Base de dados
-
-Esta entrega não inclui a base. Coloque seus arquivos `.db` em:
-
-```text
-data/base/
-```
-
-O sistema espera bases SQLite com tabela `acordaos`, como no projeto original.
-
-## Configurar pagamento
-
-No Streamlit Cloud, vá em **Settings > Secrets** e preencha:
-
+## Secrets principais
 ```toml
 DECIFRA_PRICE = "19,90"
 DECIFRA_PIX_KEY = "sua-chave-pix"
@@ -31,17 +30,13 @@ DECIFRA_UNLOCK_SECRET = "troque-por-uma-chave-grande"
 DECIFRA_APP_URL = "https://seu-app.streamlit.app"
 MERCADO_PAGO_ACCESS_TOKEN = "APP_USR-..."
 DECIFRA_NOTIFICATION_URL = ""
+DECIFRA_ADMIN_PASSWORD = "troque-senha-admin"
+DECIFRA_DEFAULT_MODE = "pagamento"
 ```
 
-## Fluxo comercial
+## Modo administrativo
+Abra a área administrativa na própria página, digite a senha e escolha:
+- `pagamento`: libera apenas amostra grátis e exige checkout/código.
+- `livre`: libera tudo para testes públicos, sem cobrança.
 
-1. Usuário envia arquivo ou cola texto.
-2. Sistema mostra amostra gratuita.
-3. Relatório completo fica bloqueado.
-4. Usuário paga pelo Mercado Pago.
-5. Retorno aprovado libera o relatório.
-6. Fallback manual por PIX/WhatsApp/código fica disponível.
-
-## Observação
-
-Para o Mercado Pago liberar automaticamente após o pagamento, o app precisa estar publicado em URL HTTPS e o `DECIFRA_APP_URL` precisa apontar para a URL pública do Streamlit.
+A escolha fica salva no arquivo `.decifra_mode.json` enquanto o app estiver rodando no ambiente.
