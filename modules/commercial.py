@@ -18,6 +18,8 @@ def get_config(st):
         'app_url': str(_secret_get(st, 'DECIFRA_APP_URL', '')),
         'notification_url': str(_secret_get(st, 'DECIFRA_NOTIFICATION_URL', '')),
         'mp_access_token': str(_secret_get(st, 'MERCADO_PAGO_ACCESS_TOKEN', '')),
+        'admin_password': str(_secret_get(st, 'DECIFRA_ADMIN_PASSWORD', 'admin123')),
+        'default_mode': str(_secret_get(st, 'DECIFRA_DEFAULT_MODE', 'pagamento')).lower(),
     }
 
 
