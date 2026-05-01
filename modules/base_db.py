@@ -6,47 +6,39 @@ import sqlite3
 def find_db_files(base_dir: Path):
     if not base_dir.exists():
         return []
-    return sorted(base_dir.glob('*.db'))
+    return sorted([p for p in base_dir.glob('*.db') if p.is_file()])
 
 
-def _count_tables(db_path: Path):
-    counts = {'acordao':0,'jurisprudencia':0,'sumula':0,'inteligente':0}
+def _count_table(path: Path, table: str) -> int:
     try:
-        con=sqlite3.connect(str(db_path), timeout=3)
-        cur=con.cursor()
-        tables=[r[0] for r in cur.execute("select name from sqlite_master where type='table'").fetchall()]
-        for t in tables:
-            low=t.lower()
-            try:
-                n=cur.execute(f'SELECT COUNT(*) FROM "{t}"').fetchone()[0]
-            except Exception:
-                n=0
-            if 'intelig' in low or 'preced' in low:
-                counts['inteligente'] += n
-            elif 'sum' in low:
-                counts['sumula'] += n
-            elif 'juris' in low:
-                counts['jurisprudencia'] += n
-            else:
-                counts['acordao'] += n
-        con.close()
+        con = sqlite3.connect(f'file:{path}?mode=ro', uri=True, timeout=2)
+        cur = con.cursor()
+        return int(cur.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0])
     except Exception:
-        pass
-    return counts
+        return 0
+    finally:
+        try: con.close()
+        except Exception: pass
 
 
 def summarize_bases(base_dir: Path):
-    files=find_db_files(base_dir)
-    total={'acordao':0,'jurisprudencia':0,'sumula':0,'inteligente':0}
-    for f in files[:25]:
-        c=_count_tables(f)
-        for k,v in c.items(): total[k]+=v
+    files = find_db_files(base_dir)
+    total = 0
+    bad = 0
+    for p in files:
+        n = _count_table(p, 'acordaos')
+        if n == 0:
+            bad += 1
+        total += n
     return {
         'total_bases': len(files),
-        'acordao': total['acordao'],
-        'jurisprudencia': total['jurisprudencia'],
-        'sumula': total['sumula'],
-        'inteligente': total['inteligente'],
-        'base_inteligente_detectada': total['inteligente']>0,
-        'arquivo_base_inteligente': files[0].name if files else ''
+        'total_files': len(files),
+        'arquivos_invalidos': bad,
+        'total_size_mb': round(sum(p.stat().st_size for p in files) / (1024*1024), 1),
+        'acordao': total,
+        'jurisprudencia': 0,
+        'sumula': 0,
+        'inteligente': total,
+        'base_inteligente_detectada': any(p.name == 'base_inteligente.db' for p in files),
+        'arquivo_base_inteligente': 'base_inteligente.db' if any(p.name == 'base_inteligente.db' for p in files) else '',
     }

@@ -1,60 +1,81 @@
 from __future__ import annotations
 import re
 
-ACORDAO_RE=re.compile(r'(?i)\b(ac[oó]rd[aã]o(?:\s+n[ºo.]*)?|ac\.?)[\s:]*([0-9\.]{1,7})\s*/\s*(20\d{2}|19\d{2})\s*(?:[-–—]?\s*(TCU|STJ|STF|TJ[A-Z]{2}|TRF\d?|Plen[aá]rio|1[ªa]\s*C[âa]mara|2[ªa]\s*C[âa]mara))?')
-SUMULA_RE=re.compile(r'(?i)\b(s[uú]mula)\s*(?:n[ºo.]*)?\s*([0-9]{1,5})')
+REF_RE = re.compile(r'(?P<kind>Ac[oó]rd[aã]o|S[úu]mula|Jurisprud[eê]ncia)\s*(?:n[ºo.]*)?\s*(?P<num>\d{1,6})(?:[./-](?P<year>\d{4}))?(?:\s*[-–]\s*(?P<court>TCU|STJ|STF|Plen[aá]rio|1[ªa]\s*C[aâ]mara|2[ªa]\s*C[aâ]mara))?', re.I)
 
 
-def _line_no(text, idx):
-    return text[:idx].count('\n')+1
+def _clean(s: str) -> str:
+    return re.sub(r'\s+', ' ', s or '').strip()
 
 
-def _context(text, start, end, radius=420):
-    a=max(0,start-radius); b=min(len(text),end+radius)
-    return re.sub(r'\s+',' ',text[a:b]).strip()
+def classify_piece_type(text: str):
+    t = (text or '').lower()
+    if 'impugna' in t: tipo = 'Impugnação'
+    elif 'contrarraz' in t: tipo = 'Contrarrazões'
+    elif 'recurso' in t: tipo = 'Recurso administrativo'
+    else: tipo = 'Peça jurídica'
+    return {'tipo': tipo, 'confidence': 'média'}
 
 
-def detect_thesis(text):
-    t=text.lower()
-    rules=[('Falha sanável / diligência', ['diligência','falha sanável','saneamento','erro formal']),('Exigência restritiva', ['restritiv','competitividade','exigência excessiva','desproporcional']),('Inexequibilidade', ['inexequ','preço baixo','50%','viabilidade']),('Qualificação técnica', ['qualificação técnica','atestado','capacidade técnica']),('Pesquisa de preços', ['pesquisa de preços','preço de referência','orçamento'])]
-    for label, keys in rules:
-        if any(k in t for k in keys): return label
+def detect_thesis(text: str):
+    low = (text or '').lower()
+    mapping = [
+        ('inexequibilidade', 'Inexequibilidade e diligência'),
+        ('diligência', 'Diligência saneadora'),
+        ('falha sanável', 'Falha sanável'),
+        ('formalismo', 'Formalismo moderado'),
+        ('lote único', 'Parcelamento/lote único'),
+        ('qualificação técnica', 'Qualificação técnica'),
+        ('habilitação', 'Habilitação'),
+    ]
+    for k, v in mapping:
+        if k in low: return v
     return 'Tese geral de licitações'
 
 
-def classify_piece_type(text):
-    t=text.lower()
-    if 'impugna' in t: tipo='Impugnação ao edital'
-    elif 'contrarraz' in t: tipo='Contrarrazões'
-    elif 'recurso administrativo' in t or 'interpor recurso' in t: tipo='Recurso administrativo'
-    elif 'parecer' in t: tipo='Parecer jurídico'
-    else: tipo='Peça jurídica'
-    return {'tipo':tipo,'confianca':'Alta' if tipo!='Peça jurídica' else 'Média'}
-
-
-def extract_references_with_context(text):
-    refs=[]
-    for m in ACORDAO_RE.finditer(text or ''):
-        raw=m.group(0).strip(); numero=m.group(2).replace('.',''); ano=m.group(3); orgao=(m.group(4) or 'TCU').strip()
-        refs.append({'kind':'acordao','raw':raw,'numero':numero,'ano':ano,'orgao':orgao,'linha':_line_no(text,m.start()),'contexto':_context(text,m.start(),m.end()),'tese':detect_thesis(_context(text,m.start(),m.end()))})
-    for m in SUMULA_RE.finditer(text or ''):
-        refs.append({'kind':'sumula','raw':m.group(0).strip(),'numero':m.group(2),'ano':'','orgao':'','linha':_line_no(text,m.start()),'contexto':_context(text,m.start(),m.end()),'tese':detect_thesis(_context(text,m.start(),m.end()))})
-    return refs
-
-
-def split_into_argument_blocks(text, max_blocks=6):
-    paras=[p.strip() for p in re.split(r'\n\s*\n+', text or '') if len(p.strip())>120]
-    out=[]
-    for p in paras[:max_blocks]:
-        tese=detect_thesis(p)
-        out.append({'texto':p,'tese':tese,'tese_chave':tese.lower(),'preview':p[:420]+'...' if len(p)>420 else p,'fundamentos':', '.join([x for x in ['Lei 14.133/2021' if '14.133' in p else '', 'TCU' if 'tcu' in p.lower() else '', 'diligência' if 'dilig' in p.lower() else ''] if x])})
+def extract_references_with_context(text: str):
+    refs = []
+    txt = text or ''
+    for m in REF_RE.finditer(txt):
+        start, end = max(0, m.start()-320), min(len(txt), m.end()+320)
+        before = txt[:m.start()]
+        line = before.count('\n') + 1
+        kind = m.group('kind').lower()
+        if 'súm' in kind or 'sum' in kind: kind_norm = 'sumula'
+        elif 'juris' in kind: kind_norm = 'jurisprudencia'
+        else: kind_norm = 'acordao'
+        refs.append({
+            'raw': _clean(m.group(0)),
+            'kind': kind_norm,
+            'numero': m.group('num') or '',
+            'ano': m.group('year') or '',
+            'colegiado': _clean(m.group('court') or ''),
+            'contexto': _clean(txt[start:end]),
+            'linha': line,
+            'tese': detect_thesis(txt[start:end]),
+        })
+    # dedup preservando ordem
+    seen, out = set(), []
+    for r in refs:
+        key = (r['kind'], r['numero'], r['ano'], r['raw'].lower())
+        if key not in seen:
+            seen.add(key); out.append(r)
     return out
 
 
-def parse_manual_query(q):
-    q=q or ''
-    m=ACORDAO_RE.search(q)
-    if m: return {'kind':'acordao','numero':m.group(2).replace('.',''),'ano':m.group(3),'colegiado':m.group(4),'thesis_label':detect_thesis(q)}
-    s=SUMULA_RE.search(q)
-    if s: return {'kind':'sumula','numero':s.group(2),'ano':'','colegiado':'','thesis_label':detect_thesis(q)}
-    return {'kind':'tese','numero':'','ano':'','colegiado':'','thesis_label':detect_thesis(q)}
+def split_into_argument_blocks(text: str, max_blocks: int = 6):
+    parts = [p.strip() for p in re.split(r'\n\s*\n+', text or '') if len(p.strip()) > 80]
+    if not parts:
+        parts = [text[:1800]] if text else []
+    out = []
+    for p in parts[:max_blocks]:
+        tese = detect_thesis(p)
+        out.append({'texto': p, 'text': p, 'tese': tese, 'title': tese, 'tese_chave': tese.lower(), 'preview': _clean(p[:360]), 'fundamentos': tese})
+    return out
+
+
+def parse_manual_query(query: str):
+    m = REF_RE.search(query or '')
+    if m:
+        return {'kind': 'acordao', 'numero': m.group('num'), 'ano': m.group('year') or '', 'colegiado': m.group('court') or '', 'thesis_label': detect_thesis(query)}
+    return {'kind': 'tese', 'numero': '', 'ano': '', 'colegiado': '', 'thesis_label': detect_thesis(query)}

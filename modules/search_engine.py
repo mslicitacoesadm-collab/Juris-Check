@@ -1,127 +1,141 @@
 from __future__ import annotations
 from pathlib import Path
-import sqlite3, re, math
+import sqlite3, re, html
 
-TEXT_COLS = ('citacao','citacao_curta','ementa','fundamento','fundamento_curto','texto','tema','numero','ano','orgao','colegiado')
+COLS = ['id','tipo','titulo','numero_acordao','numero_acordao_num','ano_acordao','colegiado','data_sessao','relator','processo','sumario','ementa','texto_indexado','inteiro_teor','tags']
 
-def _tokens(s):
-    return set(re.findall(r'[a-záéíóúâêôãõç0-9]{3,}', (s or '').lower()))
 
-def _score(q, text):
-    qt=_tokens(q); tt=_tokens(text)
-    if not qt or not tt: return 0.0
-    return min(1.0, len(qt & tt)/max(3, len(qt))*1.15)
+def _norm(s: str) -> str:
+    s = (s or '').lower()
+    repl = {'á':'a','à':'a','â':'a','ã':'a','é':'e','ê':'e','í':'i','ó':'o','ô':'o','õ':'o','ú':'u','ç':'c'}
+    for a,b in repl.items(): s=s.replace(a,b)
+    return re.sub(r'\s+', ' ', s).strip()
 
-def _tables(con):
-    try: return [r[0] for r in con.execute("select name from sqlite_master where type='table'").fetchall()]
-    except Exception: return []
 
-def _columns(con, table):
-    try: return [r[1] for r in con.execute(f'PRAGMA table_info("{table}")').fetchall()]
-    except Exception: return []
+def _clean_html(s: str, limit: int = 900) -> str:
+    s = re.sub(r'<[^>]+>', ' ', s or '')
+    s = html.unescape(s)
+    s = re.sub(r'\s+', ' ', s).strip()
+    return s[:limit]
 
-def _row_to_record(row, cols, table, q=''):
-    d=dict(zip(cols,row))
-    def first(*names):
-        for n in names:
-            if n in d and d[n] not in (None,''): return str(d[n])
-        return ''
-    numero=first('numero','num','acordao','nr_acordao')
-    ano=first('ano','exercicio')
-    cit=first('citacao_curta','citacao','referencia','titulo')
-    if not cit:
-        cit = f"{table} {numero}/{ano}" if numero or ano else table
-    fund=first('fundamento_curto','fundamento','ementa','texto','conteudo','descricao')
-    tema=first('tema','assunto','tese','categoria')
-    full=' '.join(str(x or '') for x in row)
-    return {'citacao_curta':cit[:220], 'fundamento_curto':fund[:1200], 'tema':tema[:200], 'compat_score':_score(q, full) if q else .55, 'motivo_match':'Correspondência textual/semântica encontrada na base local.', 'lookup_layer':'base_local', 'lookup_layer_label':'Base local'}
 
-def _search_db(db_path: Path, query: str, limit=20, exact_num='', exact_year='', kinds=None):
-    recs=[]
+def _connect(path: Path):
+    return sqlite3.connect(f'file:{path}?mode=ro', uri=True, timeout=2)
+
+
+def _row_to_record(row):
+    d = dict(zip(COLS, row[:len(COLS)]))
+    cit = d.get('numero_acordao') or d.get('titulo') or d.get('id') or 'Precedente'
+    coleg = d.get('colegiado') or 'TCU'
+    fundamento = d.get('ementa') or d.get('sumario') or d.get('texto_indexado') or d.get('inteiro_teor') or ''
+    return {
+        'id': d.get('id',''), 'tipo': d.get('tipo','ACÓRDÃO'), 'titulo': d.get('titulo',''),
+        'numero_acordao': d.get('numero_acordao',''), 'numero_acordao_num': d.get('numero_acordao_num',''),
+        'ano_acordao': d.get('ano_acordao',''), 'colegiado': coleg, 'relator': d.get('relator',''),
+        'citacao_curta': f"Acórdão {cit} - {coleg}" if re.search(r'\d', cit) else str(cit),
+        'fundamento_curto': _clean_html(fundamento, 950), 'tema': _clean_html((d.get('sumario') or d.get('ementa') or ''), 180),
+        'compat_score': 0.0, 'motivo_match': '', 'lookup_layer': '', 'lookup_layer_label': ''
+    }
+
+
+def _query_exact(db_path: Path, numero: str, ano: str = ''):
+    if not numero: return []
+    out = []
     try:
-        con=sqlite3.connect(str(db_path), timeout=2)
-        for t in _tables(con):
-            if kinds:
-                tl=t.lower()
-                if not any(k in tl for k in kinds) and not ('acordao' in kinds and ('acord' in tl or 'preced' in tl)):
-                    pass
-            cols=_columns(con,t)
-            if not cols: continue
-            sel=', '.join([f'"{c}"' for c in cols[:35]])
-            where=[]; params=[]
-            searchable=[c for c in cols if any(x in c.lower() for x in TEXT_COLS)] or cols[:8]
-            if exact_num:
-                clauses=[]
-                for c in searchable:
-                    clauses.append(f'CAST("{c}" AS TEXT) LIKE ?'); params.append(f'%{exact_num}%')
-                where.append('('+' OR '.join(clauses)+')')
-            if exact_year:
-                clauses=[]
-                for c in searchable:
-                    clauses.append(f'CAST("{c}" AS TEXT) LIKE ?'); params.append(f'%{exact_year}%')
-                where.append('('+' OR '.join(clauses)+')')
-            if not where and query:
-                words=list(_tokens(query))[:6]
-                clauses=[]
-                for w in words:
-                    sub=[]
-                    for c in searchable[:8]:
-                        sub.append(f'CAST("{c}" AS TEXT) LIKE ?'); params.append(f'%{w}%')
-                    clauses.append('('+' OR '.join(sub)+')')
-                where=clauses[:3]
-            sql=f'SELECT {sel} FROM "{t}"'
-            if where: sql+=' WHERE '+ ' AND '.join(where)
-            sql+=f' LIMIT {max(5,limit)}'
-            try:
-                for row in con.execute(sql, params).fetchmany(limit):
-                    recs.append(_row_to_record(row, cols[:35], t, query))
-            except Exception:
-                continue
-        con.close()
+        con = _connect(db_path); cur = con.cursor()
+        where = 'numero_acordao_num = ?'
+        params = [str(numero)]
+        if ano:
+            where += ' AND ano_acordao = ?'; params.append(str(ano))
+        sql = f"SELECT id,tipo,titulo,numero_acordao,numero_acordao_num,ano_acordao,colegiado,data_sessao,relator,processo,sumario,ementa,texto_indexado,inteiro_teor,tags FROM acordaos WHERE {where} LIMIT 8"
+        for row in cur.execute(sql, params).fetchall():
+            out.append(_row_to_record(row))
     except Exception:
         pass
-    recs.sort(key=lambda r: r.get('compat_score',0), reverse=True)
-    return recs[:limit]
+    finally:
+        try: con.close()
+        except Exception: pass
+    return out
 
-def search_candidates(db_paths, query_text, thesis_key='', kinds=None, top_k=4):
-    q=f'{query_text} {thesis_key}'
+
+def _keywords(q: str):
+    toks = [t for t in re.findall(r'[a-zA-ZÀ-ÿ0-9]{4,}', _norm(q)) if t not in {'para','pela','pelo','como','sobre','deve','esta','esse','essa','acordao','sumula'}]
+    return toks[:8]
+
+
+def _query_text(db_path: Path, query: str, top_k=5):
+    words = _keywords(query)
+    if not words: return []
     out=[]
-    for p in db_paths[:12]:
-        out.extend(_search_db(Path(p), q, limit=top_k*2, kinds=kinds))
-        if len(out)>=top_k*3: break
-    out.sort(key=lambda r:r.get('compat_score',0), reverse=True)
-    return out[:top_k]
+    try:
+        con=_connect(db_path); cur=con.cursor()
+        # LIKE simples, estável e compatível com as bases brutas
+        clause = ' OR '.join(['texto_indexado LIKE ? OR ementa LIKE ? OR sumario LIKE ? OR titulo LIKE ?' for _ in words[:4]])
+        params=[]
+        for w in words[:4]:
+            like=f'%{w}%'; params += [like,like,like,like]
+        sql=f"SELECT id,tipo,titulo,numero_acordao,numero_acordao_num,ano_acordao,colegiado,data_sessao,relator,processo,sumario,ementa,texto_indexado,inteiro_teor,tags FROM acordaos WHERE {clause} LIMIT {int(top_k)*2}"
+        for row in cur.execute(sql, params).fetchall():
+            rec=_row_to_record(row)
+            hay=_norm(' '.join(str(x or '') for x in row))
+            score=sum(1 for w in words if w in hay)/max(1,len(words))
+            rec['compat_score']=round(min(.98,.45+score*.5),2)
+            rec['motivo_match']='Correspondência por palavras-chave da tese informada.'
+            rec['lookup_layer']='texto'
+            rec['lookup_layer_label']='Busca por tese'
+            out.append(rec)
+    except Exception:
+        pass
+    finally:
+        try: con.close()
+        except Exception: pass
+    return sorted(out, key=lambda r:r.get('compat_score',0), reverse=True)[:top_k]
 
-def validate_reference(db_paths, citation, top_k=4):
-    raw=citation.get('raw','')
-    exact_num=citation.get('numero','')
-    exact_year=citation.get('ano','')
-    q=' '.join([raw, citation.get('contexto',''), citation.get('tese','')])
-    matches=[]
-    for p in db_paths[:12]:
-        matches.extend(_search_db(Path(p), q, limit=top_k*2, exact_num=exact_num, exact_year=exact_year, kinds={citation.get('kind','acordao')}))
-        if len(matches)>=top_k*3: break
-    matches.sort(key=lambda r:r.get('compat_score',0), reverse=True)
-    best=matches[0] if matches else None
-    status='divergente'; label='Erro relevante'; conf='Baixa confiança'; tipo='Citação não localizada na base'
-    if best:
-        if best.get('compat_score',0)>=0.52:
-            status='valida_compatível'; label='Validada'; conf='Alta confiança'; tipo='Referência localizada e compatível'
-        elif best.get('compat_score',0)>=0.25:
-            status='valida_pouco_compativel'; label='Ajuste recomendado'; conf='Média confiança'; tipo='Referência localizada com baixa aderência contextual'
-    return {**citation, 'status':status, 'status_label':label, 'grau_confianca':conf, 'tipo_erro':tipo, 'matched_record':best, 'candidates':matches[:top_k], 'correcao_sugerida':best, 'motivo_match': best.get('motivo_match') if best else 'Não houve correspondência suficientemente segura na base local.', 'camada_busca': best.get('lookup_layer_label') if best else 'Busca sem match', 'paragrafo_reescrito': _rewrite_paragraph(citation, best)}
 
-def _rewrite_paragraph(citation, best):
-    if not best: return 'Sugere-se substituir ou remover a referência até validação manual do precedente aplicável.'
-    return f"Diante do entendimento consolidado em {best['citacao_curta']}, recomenda-se ajustar a fundamentação para vincular a tese ao contexto do caso concreto, destacando que {best.get('fundamento_curto','o precedente reforça a necessidade de decisão motivada e aderente à legislação aplicável')}."
+def search_candidates(db_paths, query_text: str, thesis_key: str = '', kinds=None, top_k: int = 4):
+    allrec=[]
+    for p in db_paths:
+        allrec += _query_text(Path(p), query_text + ' ' + (thesis_key or ''), top_k=top_k)
+        if len(allrec) >= top_k: break
+    return allrec[:top_k]
 
-def search_manual_precedents(db_paths, query_text, kinds=None, top_k=8):
-    from modules.citation_extractor import parse_manual_query
-    parsed=parse_manual_query(query_text)
-    exact_num=parsed.get('numero',''); exact_year=parsed.get('ano','')
-    matches=[]
-    for p in db_paths[:12]:
-        matches.extend(_search_db(Path(p), query_text, limit=top_k*2, exact_num=exact_num, exact_year=exact_year, kinds=kinds))
-        if len(matches)>=top_k*3: break
-    matches.sort(key=lambda r:r.get('compat_score',0), reverse=True)
-    return {'search_mode':'referencia_especifica' if exact_num else 'tese', 'lookup_layer_label':'Referência exata' if exact_num else 'Busca por tese', 'matches':matches[:top_k]}
+
+def search_manual_precedents(db_paths, query_text: str, kinds=None, top_k: int = 8):
+    m = re.search(r'(?:ac[oó]rd[aã]o\s*)?(\d{1,6})[./-](\d{4})', query_text or '', re.I)
+    matches=[]; mode='tese'; layer='Busca por tese'
+    if m:
+        mode='referencia_especifica'; layer='Número/ano exato'
+        for p in db_paths:
+            matches += _query_exact(Path(p), m.group(1), m.group(2))
+            if len(matches)>=top_k: break
+        for r in matches:
+            r['compat_score']=.99; r['motivo_match']='Número e ano encontrados na base local.'; r['lookup_layer_label']=layer
+    if not matches:
+        matches = search_candidates(db_paths, query_text, '', kinds, top_k)
+        layer='Busca por tese'
+    return {'search_mode': mode, 'lookup_layer_label': layer, 'matches': matches[:top_k]}
+
+
+def validate_reference(db_paths, citation: dict, top_k: int = 4):
+    numero = citation.get('numero','')
+    ano = citation.get('ano','')
+    exact=[]
+    for p in db_paths:
+        exact += _query_exact(Path(p), numero, ano)
+        if exact: break
+    ctx = citation.get('contexto','') or citation.get('tese','') or citation.get('raw','')
+    suggestions = exact[:top_k] if exact else search_candidates(db_paths, ctx, citation.get('tese',''), None, top_k)
+    if exact:
+        status='valida_compatível'; label='Validada na base'; erro='Referência localizada por número/ano.'; conf='Alta'
+        matched=exact[0]; corr=None
+        matched['compat_score']=.99; matched['motivo_match']='Referência explícita encontrada na base.'
+    elif suggestions:
+        status='valida_pouco_compativel'; label='Ajuste recomendado'; erro='Não localizei o número exato; há precedente próximo por tese.'; conf='Média'
+        matched=None; corr=suggestions[0]
+    else:
+        status='divergente'; label='Não localizada'; erro='Referência não localizada na base disponível.'; conf='Baixa'
+        matched=None; corr=None
+    par=''
+    if corr:
+        par=f"Sugere-se substituir ou reforçar a citação por {corr.get('citacao_curta')}, por apresentar aderência temática ao argumento identificado. {corr.get('fundamento_curto','')}"
+    return {**citation, 'status':status, 'status_label':label, 'tipo_erro':erro, 'grau_confianca':conf, 'matched_record':matched, 'correcao_sugerida':corr, 'suggestions':suggestions, 'motivo_match': erro, 'camada_busca':'Exata' if exact else 'Tese', 'paragrafo_reescrito':par}

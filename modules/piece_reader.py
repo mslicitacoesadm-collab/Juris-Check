@@ -1,36 +1,27 @@
 from __future__ import annotations
-import io, zipfile, re
-
-
-def _read_docx(file_obj):
-    data=file_obj.getvalue() if hasattr(file_obj,'getvalue') else file_obj.read()
-    with zipfile.ZipFile(io.BytesIO(data)) as z:
-        xml=z.read('word/document.xml').decode('utf-8', errors='ignore')
-    xml=re.sub(r'<w:tab\/>',' ',xml)
-    xml=re.sub(r'</w:p>','\n',xml)
-    return re.sub(r'<[^>]+>','',xml)
-
-
-def _read_pdf(file_obj):
-    data=file_obj.getvalue() if hasattr(file_obj,'getvalue') else file_obj.read()
-    try:
-        from pypdf import PdfReader
-        reader=PdfReader(io.BytesIO(data))
-        return '\n'.join((p.extract_text() or '') for p in reader.pages)
-    except Exception:
-        return ''
+from io import BytesIO
 
 
 def read_uploaded_file(uploaded_file):
-    name=(uploaded_file.name or '').lower()
+    name = (getattr(uploaded_file, 'name', '') or '').lower()
+    data = uploaded_file.read()
     if name.endswith('.txt'):
-        raw=uploaded_file.getvalue() if hasattr(uploaded_file,'getvalue') else uploaded_file.read()
         for enc in ('utf-8','latin-1','cp1252'):
-            try: return raw.decode(enc)
+            try: return data.decode(enc)
             except Exception: pass
-        return raw.decode('utf-8', errors='ignore')
+        return data.decode('utf-8', errors='ignore')
     if name.endswith('.docx'):
-        return _read_docx(uploaded_file)
+        try:
+            from docx import Document
+            doc = Document(BytesIO(data))
+            return '\n'.join(p.text for p in doc.paragraphs if p.text)
+        except Exception as e:
+            return f''
     if name.endswith('.pdf'):
-        return _read_pdf(uploaded_file)
+        try:
+            from pypdf import PdfReader
+            reader = PdfReader(BytesIO(data))
+            return '\n'.join((page.extract_text() or '') for page in reader.pages)
+        except Exception:
+            return ''
     return ''
