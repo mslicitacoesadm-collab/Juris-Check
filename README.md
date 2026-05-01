@@ -1,28 +1,47 @@
-# Atlas dos Acórdãos V14 Realista
+# DECIFRA Licitações — versão final pública
 
-Versão revisada do sistema com foco em:
-- auditoria de citações geradas por IA
-- validação em base própria
-- correção automática de acórdão, jurisprudência e súmula
-- match semântico por tese
-- reescrita jurídica contextual do parágrafo
+Sistema em Streamlit para auditoria de citações jurídicas em peças de licitação, com tela única, amostra gratuita, bloqueio premium e integração com Mercado Pago Checkout Pro.
 
-## Como usar
-1. Coloque seus arquivos `.db` em `data/base/`
-2. Instale as dependências:
-   `pip install -r requirements.txt`
-3. Execute:
-   `streamlit run app.py`
+## Como rodar
 
+```bash
+pip install -r requirements.txt
+streamlit run app.py
+```
 
-## Base inteligente
+## Base de dados
 
-O sistema agora prioriza automaticamente um arquivo `data/base/base_inteligente.db` quando ele existir.
+Esta entrega não inclui a base. Coloque seus arquivos `.db` em:
 
-Passos:
+```text
+data/base/
+```
 
-1. Gere a base inteligente com o pacote `base_inteligente_atlas`.
-2. Copie `base_inteligente.db` para `data/base/`.
-3. Rode o app normalmente.
+O sistema espera bases SQLite com tabela `acordaos`, como no projeto original.
 
-Enquanto a base inteligente não existir, o sistema continua funcionando com as bases `.db` brutas já existentes.
+## Configurar pagamento
+
+No Streamlit Cloud, vá em **Settings > Secrets** e preencha:
+
+```toml
+DECIFRA_PRICE = "19,90"
+DECIFRA_PIX_KEY = "sua-chave-pix"
+DECIFRA_WHATSAPP = "5571999999999"
+DECIFRA_UNLOCK_SECRET = "troque-por-uma-chave-grande"
+DECIFRA_APP_URL = "https://seu-app.streamlit.app"
+MERCADO_PAGO_ACCESS_TOKEN = "APP_USR-..."
+DECIFRA_NOTIFICATION_URL = ""
+```
+
+## Fluxo comercial
+
+1. Usuário envia arquivo ou cola texto.
+2. Sistema mostra amostra gratuita.
+3. Relatório completo fica bloqueado.
+4. Usuário paga pelo Mercado Pago.
+5. Retorno aprovado libera o relatório.
+6. Fallback manual por PIX/WhatsApp/código fica disponível.
+
+## Observação
+
+Para o Mercado Pago liberar automaticamente após o pagamento, o app precisa estar publicado em URL HTTPS e o `DECIFRA_APP_URL` precisa apontar para a URL pública do Streamlit.
