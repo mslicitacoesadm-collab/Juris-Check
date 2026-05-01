@@ -1,150 +1,58 @@
 from __future__ import annotations
-
-import re
 from io import BytesIO
-from typing import Any, Dict
-
-from docx import Document
-from docx.enum.text import WD_COLOR_INDEX
-from docx.shared import Pt
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
+import re
 
 
-def _ensure_analysis(analysis: Any) -> Dict[str, Any]:
-    return analysis if isinstance(analysis, dict) else {}
+def build_revised_text(piece_text, analysis, mode='premium'):
+    text=piece_text or ''
+    notes=[]
+    for item in analysis.get('citation_results',[]):
+        if item.get('status')!='valida_compatível':
+            sug=item.get('correcao_sugerida')
+            if sug:
+                notes.append(f"[AJUSTE RECOMENDADO] Substituir/validar {item.get('raw')} por {sug.get('citacao_curta')}. Fundamento: {sug.get('fundamento_curto','')[:500]}")
+            else:
+                notes.append(f"[ERRO RELEVANTE] Referência não localizada: {item.get('raw')}. Recomenda-se conferência manual antes do protocolo.")
+    if mode=='simple':
+        return text + ('\n\n' + '\n'.join(notes) if notes else '')
+    header='RELATÓRIO DE REVISÃO AUTOMATIZADA - DECIFRA LICITAÇÕES\n\n'
+    intro='A seguir consta a peça com observações técnicas de validação de precedentes. As marcações indicam pontos que merecem ajuste antes do protocolo.\n\n'
+    return header+intro+text+'\n\n---\nOBSERVAÇÕES TÉCNICAS\n'+'\n'.join(notes or ['Nenhuma divergência relevante foi identificada.'])
 
 
-def _replace_raw_once(text: str, raw: str, replacement: str) -> str:
-    if not raw or not replacement:
-        return text
-    return re.sub(re.escape(raw), replacement, text, count=1, flags=re.I)
+def build_marked_text(piece_text, analysis):
+    text=piece_text or ''
+    for item in analysis.get('citation_results',[]):
+        raw=item.get('raw')
+        if raw and item.get('status')!='valida_compatível':
+            text=text.replace(raw, f'[[REVISAR: {raw}]]', 1)
+    return build_revised_text(text, analysis, mode='premium')
 
 
-def _replace_context_once(text: str, old_context: str, new_context: str) -> str:
-    if not old_context or not new_context:
-        return text
-    if old_context in text:
-        return text.replace(old_context, new_context, 1)
-    return text
+def build_docx_bytes(text, analysis, title='Documento revisado', marked=False):
+    try:
+        from docx import Document
+        from docx.shared import Pt
+        doc=Document(); doc.add_heading(title, 0)
+        p=doc.add_paragraph('Gerado pelo DECIFRA Licitações / Atlas dos Acórdãos. Revise antes de protocolar.')
+        p.runs[0].font.size=Pt(9)
+        for para in (text or '').split('\n'):
+            doc.add_paragraph(para)
+        bio=BytesIO(); doc.save(bio); return bio.getvalue()
+    except Exception:
+        return (text or '').encode('utf-8')
 
 
-def _audit_block(item: Dict[str, Any]) -> str:
-    sugerida = item.get('substituicao_textual') or 'sem substituição automática'
-    motivo = item.get('motivo_match') or 'sem justificativa adicional'
-    tipo_erro = item.get('tipo_erro') or 'ajuste técnico'
-    return (
-        "\n[AJUSTE ATLAS]\n"
-        f"- Status: {item.get('status_label', 'Em revisão')}\n"
-        f"- Tipo do ajuste: {tipo_erro}\n"
-        f"- Referência encontrada: {item.get('raw', '—')}\n"
-        f"- Referência sugerida: {sugerida}\n"
-        f"- Motivo técnico: {motivo}\n"
-        f"- Grau de confiança: {item.get('grau_confianca', '—')}\n"
-        "[FIM DO AJUSTE]\n"
-    )
-
-
-def build_marked_text(original_text: str, analysis: Dict[str, Any]) -> str:
-    analysis = _ensure_analysis(analysis)
-    updated = original_text or ''
-    for item in analysis.get('citation_results', []):
-        raw = item.get('raw')
-        replacement = item.get('substituicao_textual')
-        rewritten = item.get('paragrafo_reescrito')
-        context = item.get('contexto')
-        if item.get('status') not in {'divergente', 'valida_pouco_compativel'}:
-            continue
-        if rewritten and context:
-            marked = (
-                f"{_audit_block(item)}"
-                f"[TRECHO ORIGINAL]\n{context}\n\n"
-                f"[TRECHO AJUSTADO]\n{rewritten}\n"
-            )
-            updated = _replace_context_once(updated, context, marked)
-        elif replacement and raw:
-            marked = f"{raw} [[SUBSTITUIR POR: {replacement} | MOTIVO: {item.get('tipo_erro','ajuste técnico')}]]"
-            updated = _replace_raw_once(updated, raw, marked)
-    return updated
-
-
-def build_revised_text(original_text: str, analysis: Dict[str, Any], mode: str = 'premium') -> str:
-    analysis = _ensure_analysis(analysis)
-    updated = original_text or ''
-    for item in analysis.get('citation_results', []):
-        raw = item.get('raw')
-        replacement = item.get('substituicao_textual')
-        rewritten = item.get('paragrafo_reescrito')
-        context = item.get('contexto')
-        if item.get('status') not in {'divergente', 'valida_pouco_compativel'}:
-            continue
-        if mode in {'contextual', 'premium'} and rewritten and context:
-            updated = _replace_context_once(updated, context, rewritten)
-        elif replacement and raw:
-            updated = _replace_raw_once(updated, raw, replacement)
-    return updated
-
-
-def _resolve_title_and_analysis(arg2: Any = None, arg3: Any = None) -> tuple[Dict[str, Any], str]:
-    analysis: Dict[str, Any] = {}
-    title = 'Peça revisada'
-    if isinstance(arg2, dict):
-        analysis = arg2
-        if isinstance(arg3, str) and arg3.strip():
-            title = arg3
-    elif isinstance(arg2, str):
-        title = arg2 or title
-        if isinstance(arg3, dict):
-            analysis = arg3
-    elif isinstance(arg3, dict):
-        analysis = arg3
-    return analysis, title
-
-
-def build_docx_bytes(revised_text: str, arg2: Any = None, arg3: Any = None, marked: bool = False) -> bytes:
-    analysis, title = _resolve_title_and_analysis(arg2, arg3)
-    doc = Document()
-    style = doc.styles['Normal']
-    style.font.name = 'Arial'
-    style.font.size = Pt(11)
-    doc.add_heading(title, level=1)
-    piece_type = analysis.get('piece_type', {}) if isinstance(analysis, dict) else {}
-    info = doc.add_paragraph()
-    info.add_run('Tipo identificado: ').bold = True
-    info.add_run((piece_type or {}).get('tipo', 'Não identificado'))
-    info = doc.add_paragraph()
-    info.add_run('Foco da versão: ').bold = True
-    info.add_run('auditoria de citação, busca robusta por referência e reescrita jurídica contextual.')
-    if marked:
-        p = doc.add_paragraph()
-        p.add_run('Esta versão preserva o trecho original e evidencia o ajuste recomendado com marcação de auditoria.').italic = True
-    doc.add_paragraph('')
-    for part in (revised_text or '').split('\n'):
-        if not part.strip():
-            continue
-        p = doc.add_paragraph()
-        run = p.add_run(part.strip())
-        if marked and ('[AJUSTE ATLAS]' in part or '[TRECHO AJUSTADO]' in part or '[[SUBSTITUIR POR:' in part):
-            run.font.highlight_color = WD_COLOR_INDEX.YELLOW
-    bio = BytesIO()
-    doc.save(bio)
-    return bio.getvalue()
-
-
-def build_pdf_bytes(revised_text: str, arg2: Any = None, arg3: Any = None) -> bytes:
-    analysis, title = _resolve_title_and_analysis(arg2, arg3)
-    bio = BytesIO()
-    pdf = SimpleDocTemplate(bio, pagesize=A4, rightMargin=36, leftMargin=36, topMargin=36, bottomMargin=36)
-    styles = getSampleStyleSheet()
-    story = [Paragraph(f'<b>{title}</b>', styles['Title']), Spacer(1, 12)]
-    piece_type = analysis.get('piece_type', {}) if isinstance(analysis, dict) else {}
-    story.append(Paragraph(f"<b>Tipo identificado:</b> {(piece_type or {}).get('tipo', 'Não identificado')}", styles['Normal']))
-    story.append(Spacer(1, 10))
-    safe_text = (revised_text or '').replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-    for para in safe_text.split('\n'):
-        if para.strip():
-            story.append(Paragraph(para.strip(), styles['Normal']))
-            story.append(Spacer(1, 6))
-    pdf.build(story)
-    return bio.getvalue()
+def build_pdf_bytes(text, analysis, title='Documento revisado'):
+    try:
+        from reportlab.lib.pagesizes import A4
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+        from reportlab.lib.styles import getSampleStyleSheet
+        bio=BytesIO(); doc=SimpleDocTemplate(bio, pagesize=A4)
+        styles=getSampleStyleSheet(); story=[Paragraph(title, styles['Title']), Spacer(1,12)]
+        safe=(text or '').replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')
+        for para in safe.split('\n'):
+            story.append(Paragraph(para or ' ', styles['BodyText']))
+        doc.build(story); return bio.getvalue()
+    except Exception:
+        return (text or '').encode('utf-8')
