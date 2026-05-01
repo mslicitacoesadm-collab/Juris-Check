@@ -1,24 +1,34 @@
 from __future__ import annotations
 
 from pathlib import Path
-import json
 import re
 import pandas as pd
 import streamlit as st
 
 from modules.base_db import find_db_files, summarize_bases
 from modules.citation_extractor import classify_piece_type, extract_references_with_context, split_into_argument_blocks
-from modules.document_builder import build_docx_bytes, build_marked_text, build_pdf_bytes, build_revised_text
+from modules.document_builder import build_docx_bytes, build_pdf_bytes, build_revised_text, build_audit_docx_bytes
 from modules.piece_reader import read_uploaded_file
-from modules.report_builder import build_export_rows
+from modules.report_builder import build_export_rows, build_audit_summary, risk_level
 from modules.search_engine import search_candidates, search_manual_precedents, validate_reference
-from modules.commercial import get_config, make_order_id, make_unlock_code, premium_active, validate_unlock_code, create_mp_preference, get_mp_payment_status
+from modules.commercial import (
+    get_config,
+    load_admin_settings,
+    save_admin_settings,
+    make_order_id,
+    make_unlock_code,
+    premium_active,
+    validate_unlock_code,
+    create_mp_preference,
+    get_mp_payment_status,
+    price_to_float,
+)
 
 st.set_page_config(page_title='DECIFRA Licitações', page_icon='⚖️', layout='wide', initial_sidebar_state='collapsed')
 
 BASE_DIR = Path(__file__).parent
 DB_DIR = BASE_DIR / 'data' / 'base'
-MODE_FILE = BASE_DIR / '.decifra_mode.json'
+SETTINGS_FILE = BASE_DIR / '.decifra_admin_config.json'
 
 DEFAULT_STATE = {
     'analysis': None,
@@ -30,8 +40,8 @@ DEFAULT_STATE = {
     'mp_preference': None,
     'admin_ok': False,
 }
-for k, v in DEFAULT_STATE.items():
-    st.session_state.setdefault(k, v)
+for key, value in DEFAULT_STATE.items():
+    st.session_state.setdefault(key, value)
 
 
 @st.cache_data(show_spinner=False)
@@ -61,13 +71,6 @@ def cached_manual_search(db_paths, query_text: str, kinds_key: str, top_k: int):
     return search_manual_precedents([Path(p) for p in db_paths], query_text, kinds=kinds, top_k=top_k)
 
 
-def price_float(price_text: str) -> float:
-    try:
-        return float(str(price_text).replace('R$', '').replace('.', '').replace(',', '.').strip())
-    except Exception:
-        return 19.90
-
-
 def compact(text: str, limit: int = 420) -> str:
     text = re.sub(r'\s+', ' ', str(text or '')).strip()
     return text[:limit] + ('...' if len(text) > limit else '')
@@ -93,40 +96,21 @@ def get_first_param(params, *names):
     return ''
 
 
-def read_mode(cfg) -> str:
-    default = cfg.get('default_mode', 'pagamento')
-    if default not in {'pagamento', 'livre'}:
-        default = 'pagamento'
-    try:
-        if MODE_FILE.exists():
-            data = json.loads(MODE_FILE.read_text(encoding='utf-8'))
-            mode = str(data.get('mode', default)).lower()
-            if mode in {'pagamento', 'livre'}:
-                return mode
-    except Exception:
-        pass
-    return default
-
-
-def write_mode(mode: str):
-    MODE_FILE.write_text(json.dumps({'mode': mode}, ensure_ascii=False, indent=2), encoding='utf-8')
-
-
 def css():
     st.markdown('''
 <style>
-:root{--bg:#f7f8fb;--card:#ffffff;--ink:#101828;--muted:#667085;--line:#e5e7eb;--navy:#071d35;--navy2:#10375f;--accent:#c9973a;--soft:#f9fafb;--danger:#b42318;--warn:#b54708;--ok:#027a48}
-.stApp{background:radial-gradient(circle at top left,#eef4fb 0,#f8fafc 35%,#f3f5f8 100%);color:var(--ink)}
-.block-container{max-width:1180px;padding-top:1.1rem;padding-bottom:3rem}.main .block-container{padding-left:1.2rem;padding-right:1.2rem}
+:root{--ink:#101828;--muted:#667085;--line:#E4E7EC;--navy:#071D35;--navy2:#10375F;--gold:#C9973A;--soft:#F8FAFC;--green:#027A48;--red:#B42318;--amber:#B54708}
+.stApp{background:linear-gradient(135deg,#F6F8FB 0%,#EEF3F8 52%,#F7F8FA 100%);color:var(--ink)}
+.block-container{max-width:1180px;padding-top:1rem;padding-bottom:3rem}.main .block-container{padding-left:1.1rem;padding-right:1.1rem}
 #MainMenu,footer,header{visibility:hidden}.stDeployButton{display:none}
-.hero{background:linear-gradient(135deg,#071d35 0%,#10375f 60%,#1b4f7d 100%);border-radius:28px;padding:30px;color:white;box-shadow:0 28px 80px rgba(16,24,40,.22);border:1px solid rgba(255,255,255,.12);position:relative;overflow:hidden}.hero:after{content:"";position:absolute;right:-95px;top:-90px;width:270px;height:270px;border-radius:999px;background:rgba(255,255,255,.08)}.hero:before{content:"";position:absolute;right:70px;bottom:-90px;width:210px;height:210px;border-radius:999px;border:1px solid rgba(255,255,255,.12)}
-.brand{font-size:.76rem;text-transform:uppercase;letter-spacing:.16em;font-weight:950;color:#f4d48d}.hero h1{font-size:clamp(2rem,4.8vw,3.9rem);line-height:1;letter-spacing:-.052em;margin:.45rem 0 .7rem;font-weight:950}.hero p{font-size:1.02rem;line-height:1.62;color:#e8eef7;max-width:760px;margin:0}.mode-pill{display:inline-flex;margin-top:1rem;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.22);color:#fff;border-radius:999px;padding:.56rem .9rem;font-weight:900}.price-pill{display:inline-flex;margin-top:1rem;margin-left:.45rem;background:#fff;color:#071d35;border-radius:999px;padding:.56rem .9rem;font-weight:950;box-shadow:0 12px 30px rgba(0,0,0,.16)}
-.card{background:rgba(255,255,255,.95);border:1px solid var(--line);border-radius:24px;padding:21px;box-shadow:0 18px 45px rgba(16,24,40,.075);margin-top:16px}.card.slim{padding:15px}.step{display:inline-flex;gap:.5rem;align-items:center;background:#eef4fb;color:#10375f;border:1px solid #d8e6f5;border-radius:999px;padding:.42rem .72rem;font-size:.80rem;font-weight:950;margin-bottom:12px}.muted{color:var(--muted)}.mini{font-size:.84rem;color:var(--muted)}
-.metric{background:var(--soft);border:1px solid var(--line);border-radius:17px;padding:15px}.metric b{font-size:1.58rem;display:block;letter-spacing:-.04em}.metric span{color:var(--muted);font-size:.84rem}.result{border:1px solid var(--line);background:#fff;border-radius:18px;padding:15px;margin:12px 0}.badge{display:inline-block;border-radius:999px;padding:.25rem .60rem;font-size:.72rem;font-weight:950;margin-bottom:.45rem}.ok{background:#ecfdf3;color:var(--ok);border:1px solid #abefc6}.warn{background:#fffaeb;color:var(--warn);border:1px solid #fedf89}.danger{background:#fef3f2;color:var(--danger);border:1px solid #fecdca}
-.lock{background:linear-gradient(135deg,#fff9ec,#ffffff);border:1px solid #efd49c;border-radius:22px;padding:22px;text-align:center;margin:16px 0;box-shadow:0 20px 46px rgba(184,135,45,.12)}.lock h3{margin-top:0}.secure{display:flex;gap:.55rem;flex-wrap:wrap;margin-top:12px;justify-content:center}.secure span{background:#f2f4f7;color:#344054;border:1px solid #e4e7ec;border-radius:999px;padding:.38rem .7rem;font-size:.76rem;font-weight:850}
-.preview-wrap{position:relative;border:1px solid var(--line);border-radius:20px;background:#fff;overflow:hidden;margin-top:14px}.preview-title{padding:14px 16px;border-bottom:1px solid var(--line);font-weight:950;color:#10375f}.piece-preview{padding:18px;max-height:280px;overflow:hidden;white-space:pre-wrap;font-family:Georgia,serif;font-size:.93rem;line-height:1.65;color:#263348}.piece-preview.blurred{filter:blur(4px);user-select:none;max-height:260px}.fade-lock{position:absolute;inset:48px 0 0 0;background:linear-gradient(180deg,rgba(255,255,255,.24),rgba(255,255,255,.94) 62%,#fff 100%);display:flex;align-items:center;justify-content:center;text-align:center;padding:22px}.fade-lock>div{background:rgba(255,255,255,.96);border:1px solid #efd49c;border-radius:18px;padding:16px;box-shadow:0 16px 45px rgba(16,24,40,.12);max-width:520px}.admin-box{border:1px dashed #cfd7e3;border-radius:18px;padding:14px;background:#fbfcff}.footer-note{text-align:center;color:var(--muted);font-size:.82rem;margin-top:20px}
-.stButton>button,.stDownloadButton>button{border-radius:14px!important;min-height:3rem;font-weight:850!important;border:1px solid #d0d5dd!important}.stButton>button[kind="primary"]{background:linear-gradient(135deg,#10375f,#071d35)!important;color:#fff!important;border:0!important}.stTextInput input,.stTextArea textarea{border-radius:14px!important;border-color:#d0d5dd!important}.stFileUploader section{border-radius:18px!important;border-color:#d0d5dd!important;background:#fbfcfe!important}a[data-testid="stLinkButton"]{border-radius:14px!important;font-weight:850!important}
-@media(max-width:760px){.block-container{padding-left:.82rem!important;padding-right:.82rem!important;padding-top:.7rem}.hero{padding:22px;border-radius:22px}.hero p{font-size:.96rem}.card{padding:16px;border-radius:20px}.metric{padding:12px}.metric b{font-size:1.22rem}.price-pill,.mode-pill{width:100%;justify-content:center;margin-left:0}.piece-preview{font-size:.88rem}.fade-lock{padding:12px}}
+.hero{background:linear-gradient(135deg,#06182C 0%,#0B2A4A 58%,#123F69 100%);border-radius:30px;padding:30px;color:white;box-shadow:0 30px 90px rgba(16,24,40,.24);border:1px solid rgba(255,255,255,.12);position:relative;overflow:hidden}.hero:after{content:"";position:absolute;right:-95px;top:-85px;width:280px;height:280px;border-radius:999px;background:rgba(255,255,255,.075)}
+.kicker{font-size:.74rem;text-transform:uppercase;letter-spacing:.18em;font-weight:950;color:#F5D99A}.hero h1{font-size:clamp(2.05rem,5vw,4rem);line-height:.98;letter-spacing:-.055em;margin:.45rem 0 .75rem;font-weight:950}.hero p{font-size:1.02rem;line-height:1.62;color:#E8EEF7;max-width:780px;margin:0}
+.pill{display:inline-flex;align-items:center;gap:.35rem;margin-top:1rem;margin-right:.45rem;border-radius:999px;padding:.55rem .85rem;font-size:.80rem;font-weight:950;border:1px solid rgba(255,255,255,.22);background:rgba(255,255,255,.12);color:#fff}.pill.gold{background:#fff;color:#071D35;border-color:#fff}.pill.free{background:#ECFDF3;color:#027A48;border-color:#ABEFC6}
+.card{background:rgba(255,255,255,.96);border:1px solid var(--line);border-radius:24px;padding:21px;box-shadow:0 18px 45px rgba(16,24,40,.075);margin-top:16px}.card.compact{padding:15px}.step{display:inline-flex;background:#EAF2FA;color:#10375F;border:1px solid #D8E6F5;border-radius:999px;padding:.42rem .72rem;font-size:.80rem;font-weight:950;margin-bottom:12px}.muted,.mini{color:var(--muted)}.mini{font-size:.84rem}.section-title{font-size:1.05rem;font-weight:950;margin:12px 0;color:#071D35}.metric{background:#F9FAFB;border:1px solid var(--line);border-radius:18px;padding:15px}.metric b{font-size:1.55rem;display:block;letter-spacing:-.04em}.metric span{color:var(--muted);font-size:.84rem}.result{border:1px solid var(--line);background:#fff;border-radius:18px;padding:15px;margin:12px 0}.badge{display:inline-block;border-radius:999px;padding:.25rem .60rem;font-size:.72rem;font-weight:950;margin-bottom:.45rem}.ok{background:#ECFDF3;color:var(--green);border:1px solid #ABEFC6}.warn{background:#FFFAEB;color:var(--amber);border:1px solid #FEDF89}.danger{background:#FEF3F2;color:var(--red);border:1px solid #FECDCA}.info{background:#EFF8FF;color:#175CD3;border:1px solid #B2DDFF}
+.lock{background:linear-gradient(135deg,#FFF9EC,#FFFFFF);border:1px solid #EFD49C;border-radius:22px;padding:22px;text-align:center;margin:16px 0;box-shadow:0 20px 46px rgba(184,135,45,.12)}.lock h3{margin-top:0}.secure{display:flex;gap:.55rem;flex-wrap:wrap;margin-top:12px;justify-content:center}.secure span{background:#F2F4F7;color:#344054;border:1px solid #E4E7EC;border-radius:999px;padding:.38rem .7rem;font-size:.76rem;font-weight:850}
+.preview-wrap{position:relative;border:1px solid var(--line);border-radius:20px;background:#fff;overflow:hidden;margin-top:14px}.preview-title{padding:14px 16px;border-bottom:1px solid var(--line);font-weight:950;color:#10375F}.piece-preview{padding:18px;max-height:330px;overflow:hidden;white-space:pre-wrap;font-family:Georgia,'Times New Roman',serif;font-size:.94rem;line-height:1.68;color:#263348}.piece-preview.blurred{filter:blur(4.5px);user-select:none;max-height:280px}.fade-lock{position:absolute;inset:49px 0 0 0;background:linear-gradient(180deg,rgba(255,255,255,.16),rgba(255,255,255,.93) 65%,#fff 100%);display:flex;align-items:center;justify-content:center;text-align:center;padding:22px}.fade-lock>div{background:rgba(255,255,255,.97);border:1px solid #EFD49C;border-radius:18px;padding:16px;box-shadow:0 16px 45px rgba(16,24,40,.12);max-width:560px}.admin-box{border:1px dashed #CBD5E1;border-radius:18px;padding:15px;background:#FBFCFF}.admin-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.footer-note{text-align:center;color:var(--muted);font-size:.82rem;margin-top:20px}.audit-line{padding:.65rem .8rem;border-radius:14px;background:#F8FAFC;border:1px solid #EAECF0;margin:.45rem 0}
+.stButton>button,.stDownloadButton>button{border-radius:14px!important;min-height:3rem;font-weight:850!important;border:1px solid #D0D5DD!important}.stButton>button[kind="primary"]{background:linear-gradient(135deg,#10375F,#071D35)!important;color:#fff!important;border:0!important}.stTextInput input,.stTextArea textarea,.stNumberInput input{border-radius:14px!important;border-color:#D0D5DD!important}.stFileUploader section{border-radius:18px!important;border-color:#D0D5DD!important;background:#FBFCFE!important}a[data-testid="stLinkButton"]{border-radius:14px!important;font-weight:850!important}
+@media(max-width:760px){.block-container{padding-left:.82rem!important;padding-right:.82rem!important;padding-top:.7rem}.hero{padding:22px;border-radius:22px}.hero p{font-size:.96rem}.card{padding:16px;border-radius:20px}.metric{padding:12px}.metric b{font-size:1.22rem}.pill{width:100%;justify-content:center;margin-right:0}.piece-preview{font-size:.88rem}.fade-lock{padding:12px}.admin-grid{grid-template-columns:1fr}}
 </style>
 ''', unsafe_allow_html=True)
 
@@ -155,53 +139,91 @@ def check_payment_return(cfg):
         st.warning(f"Pagamento com status: {payment.get('status','pendente')}.")
 
 
-def render_hero(cfg, summary, mode):
-    mode_label = 'MODO LIVRE PARA TESTES' if mode == 'livre' else 'PAGAMENTO ATIVO'
+def render_hero(cfg, settings, summary):
+    mode = settings.get('mode', 'pagamento')
+    mode_label = 'MODO LIVRE ATIVO' if mode == 'livre' else 'MODO PAGAMENTO ATIVO'
+    mode_cls = 'free' if mode == 'livre' else ''
     st.markdown(f'''
 <div class="hero">
-  <div class="brand">DECIFRA LICITAÇÕES</div>
-  <h1>Auditoria jurídica antes do protocolo.</h1>
-  <p>Valide precedentes, identifique riscos e gere uma peça revisada com mais segurança. Direto na tela principal, sem fluxo confuso.</p>
-  <div class="mode-pill">{mode_label}</div><div class="price-pill">Completo · R$ {cfg['price']}</div>
+  <div class="kicker">{cfg.get('brand_name','DECIFRA Licitações')}</div>
+  <h1>Auditoria técnica de peças de licitação</h1>
+  <p>Valide citações, identifique pontos frágeis e gere um relatório profissional com registro claro do que foi conferido, sugerido e marcado para revisão.</p>
+  <div>
+    <span class="pill {mode_cls}">{mode_label}</span>
+    <span class="pill gold">R$ {settings.get('price', cfg.get('price','19,90'))}</span>
+    <span class="pill">{summary.get('total_files',0)} base(s) conectada(s)</span>
+  </div>
 </div>
-<div class="card slim"><b>Base local:</b> {summary.get('total_files',0)} arquivo(s) · {summary.get('acordao',0):,} registros detectados <span class="muted">— envie suas bases .db para <code>data/base/</code>.</span></div>
-'''.replace(',', '.'), unsafe_allow_html=True)
+''', unsafe_allow_html=True)
 
 
-def render_admin(cfg, mode):
-    with st.expander('Área administrativa'):
+def render_admin(cfg, settings):
+    with st.expander('Administração da ferramenta', expanded=False):
         st.markdown('<div class="admin-box">', unsafe_allow_html=True)
         if not st.session_state.admin_ok:
-            pwd = st.text_input('Senha administrativa', type='password', placeholder='Digite a senha para liberar controles')
-            if st.button('Entrar como administrador', use_container_width=True):
-                if pwd and pwd == cfg.get('admin_password', ''):
+            pwd = st.text_input('Senha administrativa', type='password', placeholder='Digite a senha')
+            if st.button('Entrar como administrador', type='primary', use_container_width=True):
+                if pwd == cfg.get('admin_password'):
                     st.session_state.admin_ok = True
                     st.rerun()
                 else:
                     st.error('Senha administrativa inválida.')
         else:
-            st.success('Administrador autenticado.')
-            selected = st.radio(
-                'Modo público do sistema',
-                ['pagamento', 'livre'],
-                index=0 if mode == 'pagamento' else 1,
-                horizontal=True,
-                help='Pagamento: libera apenas amostra grátis e exige checkout/código. Livre: libera tudo para testes públicos.'
-            )
-            if st.button('Salvar modo público', type='primary', use_container_width=True):
-                write_mode(selected)
-                st.success(f'Modo público alterado para: {selected.upper()}')
+            st.success('Painel administrativo liberado.')
+            c1, c2, c3 = st.columns(3)
+            new_mode = c1.radio('Modo público', ['pagamento', 'livre'], index=0 if settings.get('mode') == 'pagamento' else 1, horizontal=True)
+            new_price = c2.text_input('Preço do desbloqueio', value=str(settings.get('price', cfg.get('price','19,90'))))
+            new_free_limit = c3.number_input('Resultados grátis', min_value=0, max_value=10, value=int(settings.get('free_limit', 1)), step=1)
+
+            c4, c5, c6 = st.columns(3)
+            blur_preview = c4.toggle('Prévia com blur', value=bool(settings.get('blur_preview', True)))
+            mp_enabled = c5.toggle('Mercado Pago ativo', value=bool(settings.get('mp_enabled', True)))
+            pix_enabled = c6.toggle('PIX/WhatsApp fallback', value=bool(settings.get('pix_enabled', True)))
+
+            c7, c8, c9 = st.columns(3)
+            manual_code = c7.toggle('Código manual ativo', value=bool(settings.get('manual_code_enabled', True)))
+            show_search = c8.toggle('Busca rápida visível', value=bool(settings.get('show_manual_search', True)))
+            show_teaser = c9.toggle('Teaser comercial visível', value=bool(settings.get('show_admin_teaser', True)))
+
+            pix_key = st.text_input('Chave PIX exibida no fallback', value=str(settings.get('pix_key') or cfg.get('pix_key','')))
+            whatsapp = st.text_input('WhatsApp para comprovante', value=str(settings.get('whatsapp') or cfg.get('whatsapp','')))
+
+            b1, b2, b3 = st.columns(3)
+            if b1.button('Salvar configurações', type='primary', use_container_width=True):
+                save_admin_settings(SETTINGS_FILE, {
+                    'mode': new_mode,
+                    'price': new_price,
+                    'free_limit': int(new_free_limit),
+                    'blur_preview': bool(blur_preview),
+                    'mp_enabled': bool(mp_enabled),
+                    'pix_enabled': bool(pix_enabled),
+                    'manual_code_enabled': bool(manual_code),
+                    'show_manual_search': bool(show_search),
+                    'show_admin_teaser': bool(show_teaser),
+                    'pix_key': pix_key,
+                    'whatsapp': whatsapp,
+                })
+                st.success('Configurações salvas.')
                 st.rerun()
-            c1, c2 = st.columns(2)
-            if c1.button('Limpar análise da sessão', use_container_width=True):
-                for k in DEFAULT_STATE:
+            if b2.button('Limpar sessão', use_container_width=True):
+                for k, v in DEFAULT_STATE.items():
                     if k != 'admin_ok':
-                        st.session_state[k] = DEFAULT_STATE[k]
+                        st.session_state[k] = v
                 st.rerun()
-            if c2.button('Sair do admin', use_container_width=True):
+            if b3.button('Sair do admin', use_container_width=True):
                 st.session_state.admin_ok = False
                 st.rerun()
-            st.caption('Dica de lançamento: use modo LIVRE para testar com clientes de confiança; depois mude para PAGAMENTO sem alterar código.')
+
+            st.markdown('##### Controle de liberação manual')
+            if st.session_state.get('order_id'):
+                st.caption('Use apenas após conferir pagamento/manualmente. Não compartilhe a chave secreta.')
+                st.code(f"Pedido: {st.session_state.order_id}")
+                st.code(f"Código: {make_unlock_code(st.session_state.order_id, cfg.get('unlock_secret',''))}")
+            else:
+                st.caption('Depois que uma análise for feita, o pedido e o código de liberação aparecerão aqui.')
+
+            st.markdown('##### Sugestões futuras para o painel')
+            st.markdown('- Histórico simples de análises e desbloqueios em CSV local.\n- Campo de cupom por campanha.\n- Limite por IP/sessão para evitar uso abusivo no modo livre.\n- Mensagens comerciais A/B para testar conversão.\n- Dashboard de receita estimada por dia.')
         st.markdown('</div>', unsafe_allow_html=True)
 
 
@@ -212,14 +234,15 @@ def run_analysis(db_files, db_paths):
         uploaded = st.file_uploader('Arquivo PDF, DOCX ou TXT', type=['pdf', 'docx', 'txt'])
     with c2:
         manual_text = st.text_area('Ou cole o texto', height=145, placeholder='Cole aqui a impugnação, recurso, contrarrazão ou manifestação...')
-    if st.button('Auditar agora', type='primary', use_container_width=True):
+
+    if st.button('Auditar peça agora', type='primary', use_container_width=True):
         if not db_files:
             st.error('Nenhuma base .db encontrada. Envie suas bases para data/base/.')
             st.stop()
         if uploaded is None and not manual_text.strip():
             st.error('Envie um arquivo ou cole o texto da peça.')
             st.stop()
-        with st.spinner('Auditando peça...'):
+        with st.spinner('Auditando a peça com base local...'):
             if uploaded is not None:
                 piece_text = read_uploaded_file(uploaded)
                 file_name = uploaded.name
@@ -233,14 +256,20 @@ def run_analysis(db_files, db_paths):
             refs = extract_references_with_context(piece_text)
             piece_type = classify_piece_type(piece_text)
             blocks = split_into_argument_blocks(piece_text, max_blocks=6)
-            citation_results = [cached_validate(db_paths, ref, 4) for ref in refs[:50]]
+            citation_results = [cached_validate(db_paths, ref, 4) for ref in refs[:60]]
             thesis_results = []
             for block in blocks:
                 suggestions = cached_search(db_paths, block.get('texto', ''), block.get('tese_chave', ''), 'acordao,jurisprudencia,sumula', 3)
                 if suggestions:
                     thesis_results.append({'tese': block.get('tese', 'Tese'), 'preview': block.get('preview', ''), 'sugestoes': suggestions})
 
-            st.session_state.analysis = {'piece_type': piece_type, 'citation_results': citation_results, 'thesis_results': thesis_results, 'piece_text': piece_text, 'file_name': file_name}
+            st.session_state.analysis = {
+                'piece_type': piece_type,
+                'citation_results': citation_results,
+                'thesis_results': thesis_results,
+                'piece_text': piece_text,
+                'file_name': file_name,
+            }
             st.session_state.last_text = piece_text
             st.session_state.last_file_name = file_name
             st.session_state.order_id = make_order_id(file_name)
@@ -251,13 +280,14 @@ def run_analysis(db_files, db_paths):
 
 
 def render_metrics(analysis, unlocked):
-    results = analysis.get('citation_results', [])
-    total = len(results)
-    issues = sum(1 for r in results if r.get('status') != 'valida_compatível')
-    teses = len(analysis.get('thesis_results', []))
-    liberados = total if unlocked else min(total, 1)
+    summary = build_audit_summary(analysis)
     cols = st.columns(4)
-    data = [(total, 'referências'), (issues, 'atenções'), (teses, 'teses'), (liberados, 'liberados')]
+    data = [
+        (summary['total_referencias'], 'referências'),
+        (summary['pontos_revisao'], 'pontos de revisão'),
+        (summary['teses_sugeridas'], 'teses sugeridas'),
+        (summary['risco'], 'risco técnico'),
+    ]
     for col, (num, label) in zip(cols, data):
         col.markdown(f'<div class="metric"><b>{num}</b><span>{label}</span></div>', unsafe_allow_html=True)
 
@@ -268,101 +298,107 @@ def result_item(item):
     st.markdown('<div class="result">', unsafe_allow_html=True)
     st.markdown(f'<span class="badge {cls}">{item.get("status_label", "Resultado")}</span>', unsafe_allow_html=True)
     st.markdown(f"**{item.get('raw','Referência')}**")
-    st.caption(f"Linha {item.get('linha','-')} · {item.get('grau_confianca','')} · {item.get('tipo_erro','')}")
+    st.caption(f"Linha aproximada {item.get('linha','-')} · Confiança {item.get('grau_confianca','')} · {item.get('tipo_erro','')}")
     if sug:
-        st.markdown(f"**Sugestão:** {sug.get('citacao_curta','')}")
+        st.markdown(f"**Depois / sugestão segura:** {sug.get('citacao_curta','')}")
         if sug.get('fundamento_curto'):
-            st.write(compact(sug.get('fundamento_curto'), 650))
+            st.write(compact(sug.get('fundamento_curto'), 680))
     if item.get('paragrafo_reescrito'):
-        with st.expander('Texto sugerido'):
+        with st.expander('Sugestão textual para conferência'):
             st.write(item.get('paragrafo_reescrito'))
     st.markdown('</div>', unsafe_allow_html=True)
 
 
-def render_piece_preview(analysis, unlocked):
+def render_piece_preview(analysis, unlocked, settings):
     text = analysis.get('piece_text', '')
     title = analysis.get('file_name', 'peça enviada')
-    safe = compact(text, 2500)
+    safe = compact(text, 3200)
+    blur = bool(settings.get('blur_preview', True))
     st.markdown('<div class="preview-wrap">', unsafe_allow_html=True)
-    st.markdown(f'<div class="preview-title">Prévia da peça · {title}</div>', unsafe_allow_html=True)
-    if unlocked:
+    st.markdown(f'<div class="preview-title">Prévia real da peça · {title}</div>', unsafe_allow_html=True)
+    if unlocked or not blur:
         st.markdown(f'<div class="piece-preview">{safe}</div>', unsafe_allow_html=True)
     else:
         st.markdown(f'<div class="piece-preview blurred">{safe}</div>', unsafe_allow_html=True)
-        st.markdown('<div class="fade-lock"><div><b>A peça foi lida e auditada.</b><br><span class="mini">A prévia completa fica protegida até liberar o relatório. Isso mostra valor sem entregar todo o trabalho gratuito.</span></div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="fade-lock"><div><b>A peça foi lida e auditada.</b><br><span class="mini">O texto real fica parcialmente desfocado para demonstrar valor sem entregar a revisão completa. Desbloqueie para baixar a peça marcada e o relatório técnico.</span></div></div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
 
-def payment_box(cfg, analysis):
+def payment_box(cfg, settings, analysis):
+    price = settings.get('price') or cfg.get('price', '19,90')
     st.markdown('<div class="lock">', unsafe_allow_html=True)
-    st.markdown('### Desbloquear relatório completo')
-    st.write('Libera todas as referências, teses sugeridas, peça revisada e downloads finais.')
-    st.markdown(f"## R$ {cfg['price']}")
+    st.markdown('### Desbloquear entrega completa')
+    st.write('Libera todas as referências, o relatório técnico, a peça com marcações e a planilha de auditoria.')
+    st.markdown(f"## R$ {price}")
 
     col1, col2 = st.columns(2, gap='medium')
     with col1:
-        if cfg.get('mp_access_token'):
+        if settings.get('mp_enabled', True) and cfg.get('mp_access_token'):
             if st.button('Gerar pagamento Mercado Pago', type='primary', use_container_width=True):
                 order_id = st.session_state.get('order_id') or make_order_id(analysis.get('file_name', 'analise'))
                 st.session_state.order_id = order_id
-                st.session_state.mp_preference = create_mp_preference(cfg, order_id, 'DECIFRA Licitações - Relatório completo', price_float(cfg['price']))
+                st.session_state.mp_preference = create_mp_preference(cfg, settings, order_id, 'DECIFRA Licitações - Relatório completo', price_to_float(price))
             pref = st.session_state.get('mp_preference') or {}
             if pref.get('init_point'):
-                st.link_button('Pagar agora', pref['init_point'], use_container_width=True)
+                st.link_button('Pagar com Mercado Pago', pref['init_point'], use_container_width=True)
             if pref.get('error'):
                 st.error(pref['error'])
+        elif settings.get('mp_enabled', True):
+            st.info('Configure MERCADO_PAGO_ACCESS_TOKEN para ativar o checkout automático.')
         else:
-            st.info('Configure MERCADO_PAGO_ACCESS_TOKEN para ativar checkout automático.')
+            st.info('Mercado Pago está desativado no painel admin.')
 
     with col2:
-        code = st.text_input('Código de liberação', value=st.session_state.get('unlock_code', ''), placeholder='Cole o código recebido')
-        if code:
-            st.session_state.unlock_code = code.strip().upper()
-            if validate_unlock_code(st.session_state.unlock_code, cfg.get('unlock_secret', ''), st.session_state.get('order_id', '')):
-                st.session_state.premium_unlocked = True
-                st.rerun()
-        if cfg.get('pix_key'):
-            st.caption('PIX manual')
-            st.code(cfg.get('pix_key'))
-        if cfg.get('whatsapp'):
-            msg = f"Olá, quero liberar minha análise DECIFRA. Pedido: {st.session_state.get('order_id','')}"
-            url = 'https://wa.me/' + re.sub(r'\D', '', cfg['whatsapp']) + '?text=' + msg.replace(' ', '%20')
-            st.link_button('Enviar comprovante', url, use_container_width=True)
+        if settings.get('manual_code_enabled', True):
+            code = st.text_input('Código de liberação', value=st.session_state.get('unlock_code', ''), placeholder='Cole o código recebido')
+            if code:
+                st.session_state.unlock_code = code.strip().upper()
+                if validate_unlock_code(st.session_state.unlock_code, cfg.get('unlock_secret', ''), st.session_state.get('order_id', '')):
+                    st.session_state.premium_unlocked = True
+                    st.rerun()
+        if settings.get('pix_enabled', True):
+            pix_key = settings.get('pix_key') or cfg.get('pix_key')
+            whatsapp = settings.get('whatsapp') or cfg.get('whatsapp')
+            if pix_key:
+                st.caption('PIX manual')
+                st.code(pix_key)
+            if whatsapp:
+                msg = f"Olá, quero liberar minha análise DECIFRA. Pedido: {st.session_state.get('order_id','')}"
+                url = 'https://wa.me/' + re.sub(r'\D', '', whatsapp) + '?text=' + msg.replace(' ', '%20')
+                st.link_button('Enviar comprovante', url, use_container_width=True)
 
-    st.markdown('<div class="secure"><span>Mercado Pago</span><span>PIX fallback</span><span>Sem login obrigatório</span></div>', unsafe_allow_html=True)
-
-    if st.session_state.get('admin_ok') and st.session_state.get('order_id'):
-        with st.expander('Administrador: liberar pagamento manual'):
-            st.caption('Use após conferir o pagamento fora do checkout.')
-            st.code(st.session_state.order_id)
-            st.code(make_unlock_code(st.session_state.order_id, cfg.get('unlock_secret', '')))
+    st.markdown('<div class="secure"><span>Checkout Pro</span><span>PIX fallback</span><span>Liberação manual</span></div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
 
-def render_results(analysis, unlocked, cfg, mode):
-    st.markdown('<div class="card"><span class="step">2 · Auditoria</span>', unsafe_allow_html=True)
+def render_results(analysis, unlocked, cfg, settings):
+    st.markdown('<div class="card"><span class="step">2 · Resultado técnico</span>', unsafe_allow_html=True)
     render_metrics(analysis, unlocked)
-    render_piece_preview(analysis, unlocked)
+    summary = build_audit_summary(analysis)
+    risk, reason = risk_level(analysis)
+    badge_cls = 'danger' if risk == 'ALTO' else 'warn' if risk in {'MÉDIO', 'INDETERMINADO'} else 'ok'
+    st.markdown(f'<div class="audit-line"><span class="badge {badge_cls}">Risco {risk}</span><br><b>Diagnóstico:</b> {reason}</div>', unsafe_allow_html=True)
+    render_piece_preview(analysis, unlocked, settings)
 
-    results = analysis.get('citation_results', [])
+    results = analysis.get('citation_results', []) or []
+    st.markdown('<div class="section-title">Referências auditadas</div>', unsafe_allow_html=True)
     if not results:
-        st.info('Nenhuma citação formal foi detectada. Use a busca rápida abaixo para localizar tese ou precedente.')
+        st.info('Nenhuma citação formal foi detectada. A peça pode ser analisada pela busca rápida de tese abaixo.')
     else:
-        st.markdown('#### Referências auditadas')
-        limit = len(results) if unlocked else min(1, len(results))
+        limit = len(results) if unlocked else min(int(settings.get('free_limit', 1)), len(results))
         for item in results[:limit]:
             result_item(item)
         if not unlocked and len(results) > limit:
             st.caption(f'{len(results) - limit} resultado(s) protegido(s) no relatório completo.')
 
-    if not unlocked and mode == 'pagamento':
-        payment_box(cfg, analysis)
+    if not unlocked and settings.get('mode') == 'pagamento':
+        payment_box(cfg, settings, analysis)
 
     if unlocked:
-        if mode == 'livre':
-            st.success('Modo livre ativo: relatório completo liberado para testes.')
+        if settings.get('mode') == 'livre':
+            st.success('Modo livre ativo: entrega completa liberada para testes.')
         if analysis.get('thesis_results'):
-            st.markdown('#### Teses sugeridas')
+            st.markdown('<div class="section-title">Teses e precedentes de reforço</div>', unsafe_allow_html=True)
             for group in analysis.get('thesis_results', []):
                 with st.expander(group.get('tese', 'Tese identificada')):
                     st.write(group.get('preview', ''))
@@ -371,19 +407,22 @@ def render_results(analysis, unlocked, cfg, mode):
                         st.caption(compact(sug.get('fundamento_curto',''), 700))
 
         revised = build_revised_text(st.session_state.last_text, analysis, mode='premium')
-        marked = build_marked_text(st.session_state.last_text, analysis)
         rows = build_export_rows(analysis)
-        st.markdown('#### Exportação')
-        d1, d2, d3 = st.columns(3)
-        d1.download_button('DOCX revisado', build_docx_bytes(marked, analysis, 'DECIFRA - Documento revisado', marked=True), 'decifra_documento_revisado.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', use_container_width=True)
-        d2.download_button('PDF técnico', build_pdf_bytes(revised, analysis, 'DECIFRA - Relatório técnico'), 'decifra_relatorio_tecnico.pdf', 'application/pdf', use_container_width=True)
+        st.markdown('<div class="section-title">Downloads profissionais</div>', unsafe_allow_html=True)
+        st.caption('A peça marcada mostra exatamente os pontos validados, sugeridos ou pendentes de revisão. O relatório é separado para anexar ou conferir internamente.')
+        d1, d2, d3, d4 = st.columns(4)
+        d1.download_button('Peça marcada DOCX', build_docx_bytes(st.session_state.last_text, analysis, 'DECIFRA - Peça revisada com marcações', marked=True), 'DECIFRA_peca_revisada_marcada.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', use_container_width=True)
+        d2.download_button('Relatório DOCX', build_audit_docx_bytes(analysis), 'DECIFRA_relatorio_auditoria.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', use_container_width=True)
+        d3.download_button('Relatório PDF', build_pdf_bytes(st.session_state.last_text, analysis, 'DECIFRA - Relatório técnico de auditoria'), 'DECIFRA_relatorio_tecnico.pdf', 'application/pdf', use_container_width=True)
         csv_bytes = pd.DataFrame(rows).to_csv(index=False).encode('utf-8-sig')
-        d3.download_button('CSV auditoria', csv_bytes, 'decifra_auditoria.csv', 'text/csv', use_container_width=True)
+        d4.download_button('Planilha CSV', csv_bytes, 'DECIFRA_auditoria.csv', 'text/csv', use_container_width=True)
 
     st.markdown('</div>', unsafe_allow_html=True)
 
 
-def manual_search(db_paths, unlocked, mode, cfg):
+def manual_search(db_paths, unlocked, settings):
+    if not settings.get('show_manual_search', True):
+        return
     st.markdown('<div class="card"><span class="step">3 · Busca rápida</span>', unsafe_allow_html=True)
     q = st.text_input('Buscar precedente por tese ou número', placeholder='Ex.: inexequibilidade, diligência, Acórdão 1211/2021')
     if st.button('Buscar na base', use_container_width=True):
@@ -399,31 +438,41 @@ def manual_search(db_paths, unlocked, mode, cfg):
                 st.markdown(f"**{m.get('citacao_curta','Resultado')}**")
                 st.caption(compact(m.get('fundamento_curto',''), 700 if unlocked else 260))
                 st.markdown('</div>', unsafe_allow_html=True)
-            if not unlocked and mode == 'pagamento':
+            if not unlocked and settings.get('mode') == 'pagamento':
                 st.caption('A busca gratuita é limitada. O relatório completo libera mais resultados.')
     st.markdown('</div>', unsafe_allow_html=True)
+
+
+def render_teaser(settings):
+    if not settings.get('show_admin_teaser', True):
+        return
+    st.markdown('''
+<div class="card compact">
+  <b>Entrega ao cliente:</b> diagnóstico na tela, peça com marcações, relatório de auditoria e planilha de conferência. Nada é apresentado como correção absoluta: o sistema informa o que foi localizado, sugerido e o que exige revisão jurídica final.
+</div>
+''', unsafe_allow_html=True)
 
 
 def main():
     cfg = get_config(st)
     css()
     check_payment_return(cfg)
-    mode = read_mode(cfg)
+    settings = load_admin_settings(SETTINGS_FILE, cfg)
     db_files = find_db_files(DB_DIR)
     db_paths = tuple(str(p) for p in db_files)
     summary = cached_summary(str(DB_DIR), db_signature(DB_DIR)) if db_files else {'total_files': 0, 'acordao': 0, 'total_size_mb': 0}
 
-    render_hero(cfg, summary, mode)
-    render_admin(cfg, mode)
-
+    render_hero(cfg, settings, summary)
+    render_admin(cfg, settings)
+    render_teaser(settings)
     run_analysis(db_files, db_paths)
 
     analysis = st.session_state.get('analysis')
-    unlocked = True if mode == 'livre' else premium_active(st, cfg)
+    unlocked = True if settings.get('mode') == 'livre' else premium_active(st, cfg)
     if analysis:
-        render_results(analysis, unlocked, cfg, mode)
+        render_results(analysis, unlocked, cfg, settings)
 
-    manual_search(db_paths, unlocked, mode, cfg)
+    manual_search(db_paths, unlocked, settings)
     st.markdown('<div class="footer-note">Ferramenta de apoio técnico. A revisão final deve ser feita por profissional habilitado antes do protocolo.</div>', unsafe_allow_html=True)
 
 
