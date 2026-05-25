@@ -1,56 +1,59 @@
-# JuriScan
+# JuriScan — Versão Final de Lançamento
 
 Validador de citações e precedentes para peças jurídicas, com foco em recursos, impugnações e contrarrazões em licitações públicas.
 
-## Fluxo do produto
+## O que esta versão entrega
 
-1. Enviar peça jurídica em PDF, DOCX ou TXT.
-2. Auditar citações.
-3. Mostrar 1 resultado grátis.
-4. Bloquear o restante com paywall visual.
-5. Liberar relatório completo via código/token, sem login.
+- Tela única e profissional, sem aparência de painel técnico.
+- Fluxo claro: enviar peça → auditar → ver 1 resultado grátis → liberar relatório completo.
+- Comparação lado a lado entre a citação usada na peça e a leitura técnica do JuriScan.
+- Grau de confiança e legenda de status: validada, revisar tese, não localizada e correção sugerida.
+- Relatório completo com exportação em DOCX, DOCX marcado, PDF e CSV.
+- Paywall sem login, com liberação por código/token.
+- Busca manual por número, ano ou tese jurídica.
+- Painel administrativo protegido por variável de ambiente.
+- Textos revisados para transmitir transparência, segurança e responsabilidade jurídica.
 
-## Como rodar
+## Como rodar localmente
 
 ```bash
 pip install -r requirements.txt
 streamlit run app.py
 ```
 
-## Variáveis recomendadas
+## Configuração no Streamlit Cloud
 
-Configure no Streamlit Cloud em **Secrets** ou como variável de ambiente:
+Em **Settings → Secrets**, configure:
 
 ```toml
-JURISCAN_ADMIN_PASSWORD="sua-senha-admin-forte"
-JURISCAN_PAYMENT_URL="https://link.mercadopago.com.br/seu-link"
-JURISCAN_MAX_UPLOAD_MB="20"
+JURISCAN_ADMIN_PASSWORD = "sua-senha-administrativa"
+JURISCAN_PAYMENT_URL = "https://link-do-mercado-pago-ou-checkout"
+JURISCAN_MAX_UPLOAD_MB = "20"
+JURISCAN_PRICE_LABEL = "R$ 29,90"
 ```
 
-> A senha administrativa não deve ficar escrita no código. O app só libera o painel se `JURISCAN_ADMIN_PASSWORD` estiver configurada.
+A senha administrativa não deve ficar fixa no código.
 
-## Pagamento real
+## Base de dados
 
-Esta versão já está pronta para o fluxo sem login por token:
+Coloque os arquivos `.db` em:
 
-- pagamento aprovado no Mercado Pago;
-- webhook ou rotina externa chama a geração de token;
-- usuário informa o código `JS-XXXX-XXXX-XXXX`;
-- o relatório completo é liberado na sessão.
+```text
+data/base/
+```
 
-Para teste, o admin pode gerar tokens no painel administrativo.
+A base não é exibida ao usuário final.
 
-## LGPD e segurança mínima
+## Liberação do relatório completo
 
-- Defina limite de upload.
-- Use HTTPS no deploy.
-- Não exponha a pasta `data/base` publicamente fora do app.
-- Oriente o usuário a remover dados sensíveis desnecessários.
-- Tokens e logs ficam em `runtime/juriscan_tokens.sqlite3`.
+Sem integração por webhook, o administrador pode gerar códigos no painel interno.
+Com Mercado Pago, o fluxo recomendado é:
 
-## Estrutura
+1. Pagamento aprovado.
+2. Webhook chama rotina de geração de token.
+3. Token é entregue ao cliente.
+4. Cliente informa o token e libera o relatório completo.
 
-- `app.py`: interface principal do JuriScan.
-- `modules/search_engine.py`: motor de busca e validação.
-- `modules/license_manager.py`: tokens, liberação e painel comercial.
-- `data/base/`: bases SQLite locais.
+## Aviso jurídico
+
+O JuriScan é uma ferramenta auxiliar de auditoria. O relatório não substitui a conferência da fonte oficial nem a revisão técnica do profissional responsável antes do protocolo.
