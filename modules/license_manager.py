@@ -1,19 +1,14 @@
 from __future__ import annotations
 
-import os
 import sqlite3
-import secrets
-import string
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 RUNTIME_DIR = BASE_DIR / "runtime"
 RUNTIME_DIR.mkdir(exist_ok=True)
-DB_PATH = RUNTIME_DIR / "juriscan_tokens.sqlite3"
-
-TOKEN_ALPHABET = string.ascii_uppercase + string.digits
+DB_PATH = RUNTIME_DIR / "juriscan_growth.sqlite3"
 
 
 def _conn():
@@ -21,15 +16,18 @@ def _conn():
     conn.row_factory = sqlite3.Row
     conn.execute(
         """
-        CREATE TABLE IF NOT EXISTS access_tokens (
-            token TEXT PRIMARY KEY,
+        CREATE TABLE IF NOT EXISTS leads (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
             created_at TEXT NOT NULL,
-            expires_at TEXT NOT NULL,
-            used_at TEXT,
-            source TEXT DEFAULT 'manual',
-            payment_ref TEXT,
-            amount REAL DEFAULT 29.90,
-            notes TEXT
+            audit_id TEXT,
+            name TEXT NOT NULL,
+            email TEXT NOT NULL,
+            whatsapp TEXT NOT NULL,
+            company TEXT,
+            city_uf TEXT,
+            interest TEXT,
+            piece_type TEXT,
+            file_name TEXT
         )
         """
     )
@@ -51,52 +49,68 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def create_token(hours_valid: int = 24, source: str = "manual", payment_ref: str = "", amount: float = 29.90, notes: str = "") -> str:
-    expires = datetime.now(timezone.utc) + timedelta(hours=hours_valid)
-    token = "JS-" + "-".join("".join(secrets.choice(TOKEN_ALPHABET) for _ in range(4)) for _ in range(3))
+def save_lead(lead: Dict[str, object]) -> Dict[str, object]:
+    required = ["name", "email", "whatsapp"]
+    missing = [field for field in required if not str(lead.get(field) or "").strip()]
+    if missing:
+        return {"ok": False, "reason": "Preencha nome, e-mail e WhatsApp para receber o relatório."}
+
     with _conn() as conn:
         conn.execute(
-            "INSERT INTO access_tokens(token, created_at, expires_at, source, payment_ref, amount, notes) VALUES(?,?,?,?,?,?,?)",
-            (token, now_iso(), expires.isoformat(), source, payment_ref, amount, notes),
+            """
+            INSERT INTO leads(created_at,audit_id,name,email,whatsapp,company,city_uf,interest,piece_type,file_name)
+            VALUES(?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                now_iso(),
+                str(lead.get("audit_id") or "")[:60],
+                str(lead.get("name") or "").strip()[:160],
+                str(lead.get("email") or "").strip()[:180],
+                str(lead.get("whatsapp") or "").strip()[:80],
+                str(lead.get("company") or "").strip()[:180],
+                str(lead.get("city_uf") or "").strip()[:120],
+                str(lead.get("interest") or "").strip()[:80],
+                str(lead.get("piece_type") or "").strip()[:120],
+                str(lead.get("file_name") or "").strip()[:220],
+            ),
         )
-        conn.execute("INSERT INTO audit_log(created_at,event,details) VALUES(?,?,?)", (now_iso(), "token_created", token))
+        conn.execute(
+            "INSERT INTO audit_log(created_at,event,details) VALUES(?,?,?)",
+            (now_iso(), "lead_captured", str(lead.get("email") or "")[:180]),
+        )
         conn.commit()
-    return token
-
-
-def validate_token(token: str, mark_used: bool = False) -> Dict[str, object]:
-    token = (token or "").strip().upper()
-    if not token:
-        return {"ok": False, "reason": "Informe o código de liberação."}
-    with _conn() as conn:
-        row = conn.execute("SELECT * FROM access_tokens WHERE token=?", (token,)).fetchone()
-        if not row:
-            return {"ok": False, "reason": "Código não encontrado."}
-        expires = datetime.fromisoformat(row["expires_at"])
-        if expires < datetime.now(timezone.utc):
-            return {"ok": False, "reason": "Código expirado."}
-        if mark_used and not row["used_at"]:
-            conn.execute("UPDATE access_tokens SET used_at=? WHERE token=?", (now_iso(), token))
-            conn.execute("INSERT INTO audit_log(created_at,event,details) VALUES(?,?,?)", (now_iso(), "token_used", token))
-            conn.commit()
-        return {"ok": True, "token": token, "expires_at": row["expires_at"], "source": row["source"]}
+    return {"ok": True}
 
 
 def stats() -> Dict[str, object]:
     with _conn() as conn:
-        total = conn.execute("SELECT COUNT(*) n FROM access_tokens").fetchone()["n"]
-        used = conn.execute("SELECT COUNT(*) n FROM access_tokens WHERE used_at IS NOT NULL").fetchone()["n"]
-        revenue = conn.execute("SELECT COALESCE(SUM(amount),0) v FROM access_tokens WHERE source IN ('mercado_pago','manual_pago','admin')").fetchone()["v"]
-        last = conn.execute("SELECT token,created_at,expires_at,used_at,source,amount FROM access_tokens ORDER BY created_at DESC LIMIT 8").fetchall()
-    return {"total_tokens": total, "used_tokens": used, "revenue": revenue, "last_tokens": [dict(x) for x in last]}
+        total_leads = conn.execute("SELECT COUNT(*) n FROM leads").fetchone()["n"]
+        companies = conn.execute("SELECT COUNT(DISTINCT NULLIF(TRIM(company),'')) n FROM leads").fetchone()["n"]
+        analyses = conn.execute("SELECT COUNT(*) n FROM audit_log WHERE event='audit_created'").fetchone()["n"]
+        by_state = conn.execute(
+            "SELECT city_uf, COUNT(*) total FROM leads WHERE TRIM(COALESCE(city_uf,''))<>'' GROUP BY city_uf ORDER BY total DESC LIMIT 8"
+        ).fetchall()
+        by_interest = conn.execute(
+            "SELECT interest, COUNT(*) total FROM leads WHERE TRIM(COALESCE(interest,''))<>'' GROUP BY interest ORDER BY total DESC LIMIT 8"
+        ).fetchall()
+        by_piece = conn.execute(
+            "SELECT piece_type, COUNT(*) total FROM leads WHERE TRIM(COALESCE(piece_type,''))<>'' GROUP BY piece_type ORDER BY total DESC LIMIT 8"
+        ).fetchall()
+        last_leads = conn.execute(
+            "SELECT created_at,name,email,whatsapp,company,city_uf,interest,piece_type,file_name FROM leads ORDER BY created_at DESC LIMIT 30"
+        ).fetchall()
+    return {
+        "total_leads": total_leads,
+        "companies": companies,
+        "analyses": analyses,
+        "by_state": [dict(x) for x in by_state],
+        "by_interest": [dict(x) for x in by_interest],
+        "by_piece": [dict(x) for x in by_piece],
+        "last_leads": [dict(x) for x in last_leads],
+    }
 
 
 def log_event(event: str, details: str = "") -> None:
     with _conn() as conn:
         conn.execute("INSERT INTO audit_log(created_at,event,details) VALUES(?,?,?)", (now_iso(), event, details[:500]))
         conn.commit()
-
-
-def get_payment_url() -> str:
-    # Configure em .streamlit/secrets.toml ou variável de ambiente.
-    return os.getenv("JURISCAN_PAYMENT_URL", "").strip()
